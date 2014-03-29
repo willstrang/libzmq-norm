@@ -331,61 +331,58 @@ void zmq::norm_engine_t::send_data()
 
 void zmq::norm_engine_t::in_event()
 {
-    // This means a NormEvent is pending, so call NormGetNextEvent() and handle
+    // This means a NormEvent is probably pending, 
+    // so call NormGetNextEvent() and handle 
     NormEvent event;
-    if (!NormGetNextEvent(norm_instance, &event))
+    while (NormGetNextEvent(norm_instance, &event))
     {
-        // NORM has died before we unplugged?!
-        zmq_assert(false);
-        return;
-    }
-    
-    switch(event.type)
-    {
-        case NORM_TX_QUEUE_VACANCY:
-        case NORM_TX_QUEUE_EMPTY:
-            if (!norm_tx_ready)
-            {
-                norm_tx_ready = true;
-                send_data();
-            }
-            break;
-            
-        case NORM_RX_OBJECT_NEW:
-            //break;
-        case NORM_RX_OBJECT_UPDATED:
-            recv_data(event.object);
-            break;
-            
-        case NORM_RX_OBJECT_ABORTED:
+        switch(event.type)
         {
-            NormRxStreamState* rxState = (NormRxStreamState*)NormObjectGetUserData(event.object);
-            if (NULL != rxState)
+            case NORM_TX_QUEUE_VACANCY:
+            case NORM_TX_QUEUE_EMPTY:
+                if (!norm_tx_ready)
+                {
+                    norm_tx_ready = true;
+                    send_data();
+                }
+                break;
+
+            case NORM_RX_OBJECT_NEW:
+                //break;
+            case NORM_RX_OBJECT_UPDATED:
+                recv_data(event.object);
+                break;
+
+            case NORM_RX_OBJECT_ABORTED:
             {
-                // Remove the state from the list it's in
-                // This is now unnecessary since deletion takes care of list removal
-                // but in the interest of being clear ...
-                NormRxStreamState::List* list = rxState->AccessList();
-                if (NULL != list) list->Remove(*rxState);
-            }
-            delete rxState;
-            break;
-        }           
-        case NORM_REMOTE_SENDER_INACTIVE:
-            // Here we free resources used for this formerly active sender.
-            // Note w/ NORM_SYNC_STREAM, if sender reactivates, we may
-            //  get some messages delivered twice.  NORM_SYNC_CURRENT would
-            // mitigate that but might miss data at startup. Always tradeoffs.
-            // Instead of immediately deleting, we could instead initiate a
-            // user configurable timeout here to wait some amount of time
-            // after this event to declare the remote sender truly dead
-            // and delete its state???
-            NormNodeDelete(event.sender);  
-            break;
-            
-        default:
-            // We ignore some NORM events 
-            break;
+                NormRxStreamState* rxState = (NormRxStreamState*)NormObjectGetUserData(event.object);
+                if (NULL != rxState)
+                {
+                    // Remove the state from the list it's in
+                    // This is now unnecessary since deletion takes care of list removal
+                    // but in the interest of being clear ...
+                    NormRxStreamState::List* list = rxState->AccessList();
+                    if (NULL != list) list->Remove(*rxState);
+                }
+                delete rxState;
+                break;
+            }           
+            case NORM_REMOTE_SENDER_INACTIVE:
+                // Here we free resources used for this formerly active sender.
+                // Note w/ NORM_SYNC_STREAM, if sender reactivates, we may
+                //  get some messages delivered twice.  NORM_SYNC_CURRENT would
+                // mitigate that but might miss data at startup. Always tradeoffs.
+                // Instead of immediately deleting, we could instead initiate a
+                // user configurable timeout here to wait some amount of time
+                // after this event to declare the remote sender truly dead
+                // and delete its state???
+                NormNodeDelete(event.sender);  
+                break;
+
+            default:
+                // We ignore some NORM events 
+                break;
+        }  // end switch(event.type)
     }
 }  // zmq::norm_engine_t::in_event()
 

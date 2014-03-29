@@ -409,11 +409,11 @@ void zmq::norm_engine_t::stream_flush(bool eom, NormFlushMode flushMode)
 {
     // NormStreamFlush always will transmit pending runt segments, if applicable
     // (thus we need to manage our buffer counting accordingly if pending bytes remain)
-    if (watermark_pending)
+    if (norm_watermark_pending)
     {
         NormStreamFlush(norm_tx_stream, eom, flushMode);
     }
-    else (NORM_FLUSH_ACTIVE == flushMode);
+    else if (NORM_FLUSH_ACTIVE == flushMode)
     {
         // we flush passive, because watermark forces active ack request
         NormStreamFlush(norm_tx_stream, eom, NORM_FLUSH_PASSIVE);

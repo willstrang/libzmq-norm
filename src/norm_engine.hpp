@@ -158,6 +158,7 @@ namespace zmq
             NormInstanceHandle      norm_instance;
             handle_t                norm_descriptor_handle;
             NormSessionHandle       norm_session;
+            bool                    is_unicast;
             bool                    is_sender;
             bool                    is_receiver;
             

@@ -11,7 +11,7 @@ zmq::norm_engine_t::norm_engine_t(io_thread_t*     parent_,
                                   const options_t& options_)
  : io_object_t(parent_), zmq_session(NULL), options(options_),  
    norm_instance(NORM_INSTANCE_INVALID), norm_session(NORM_SESSION_INVALID), 
-   is_sender(false), is_receiver(false),
+   is_unicast(false), is_sender(false), is_receiver(false),
    zmq_encoder(0), norm_tx_stream(NORM_OBJECT_INVALID), 
    tx_first_msg(true), tx_more_bit(false), 
    zmq_output_ready(false), norm_tx_ready(false), 
@@ -116,6 +116,7 @@ int zmq::norm_engine_t::init(const char* network_, bool send, bool recv)
     // There's many other useful NORM options that could be applied here
     if (NormIsUnicastAddress(addr))
     {
+        is_unicast = true;
         NormSetDefaultUnicastNack(norm_session, true);
     }
     else
@@ -466,8 +467,34 @@ void zmq::norm_engine_t::in_event()
                 else
                 {
                     // Find out who didn't acknowledge and kick them out
-                    // (If this is a unicast session, then just reset indefinitely?)
-                    
+                    if (is_unicast)
+                    {
+                        // (If this is a unicast session, then just reset indefinitely?)
+                        NormResetWatermark(norm_session);
+                    }
+                    else
+                    {
+                        // Assume the receiver has quit and remove from acking list
+                        NormAckingStatus ackingStatus;
+                        NormNodeId prevNodeId = NORM_NODE_NONE;
+                        NormNodeId nodeId = NORM_NODE_NONE; // init iteration
+                        while (NormGetNextAckingNode(norm_session, &nodeId, &ackingStatus))
+                        {
+                            if (NORM_ACK_SUCCESS != ackingStatus)
+                            {
+                                NormRemoveAckingNode(norm_session, nodeId);
+                                nodeId = prevNodeId;  // prevents underlying iteration reset
+                            }
+                            else
+                            {
+                                // This keeps the underlying NORM iterator from  
+                                // resetting when an acking node is removed.
+                                NormNodeId tempId = nodeId;
+                                nodeid = prevNodeId;
+                                prevNodeId = tempId;
+                            }
+                        }
+                    }
                 }
                 break;
 

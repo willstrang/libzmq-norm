@@ -490,7 +490,7 @@ void zmq::norm_engine_t::in_event()
                                 // This keeps the underlying NORM iterator from  
                                 // resetting when an acking node is removed.
                                 NormNodeId tempId = nodeId;
-                                nodeid = prevNodeId;
+                                nodeId = prevNodeId;
                                 prevNodeId = tempId;
                             }
                         }

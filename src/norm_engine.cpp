@@ -409,7 +409,21 @@ void zmq::norm_engine_t::stream_flush(bool eom, NormFlushMode flushMode)
 {
     // NormStreamFlush always will transmit pending runt segments, if applicable
     // (thus we need to manage our buffer counting accordingly if pending bytes remain)
-    NormStreamFlush(norm_tx_stream, eom, flushMode);
+    if (watermark_pending)
+    {
+        NormStreamFlush(norm_tx_stream, eom, flushMode);
+    }
+    else (NORM_FLUSH_ACTIVE == flushMode);
+    {
+        // we flush passive, because watermark forces active ack request
+        NormStreamFlush(norm_tx_stream, eom, NORM_FLUSH_PASSIVE);
+        NormSetWatermark(norm_session, norm_tx_stream, true);
+    }
+    else
+    {
+        NormStreamFlush(norm_tx_stream, eom, flushMode);
+    }
+   
     if (0 != norm_stream_bytes_remain)
     {
         // The flush forces the runt segment out, so we increment our buffer usage count
@@ -419,7 +433,7 @@ void zmq::norm_engine_t::stream_flush(bool eom, NormFlushMode flushMode)
         {
             //TRACE("norm_engine_t::stream_flush() initiating watermark ACK request (buffer count:%lu max:%lu usage:%u)...\n",
             //       norm_stream_buffer_count, norm_stream_buffer_max);
-            NormSetWatermark(norm_session, norm_tx_stream, NormStreamGetBufferUsage(norm_tx_stream));
+            NormSetWatermark(norm_session, norm_tx_stream, true);
             norm_ack_retry_count = norm_ack_retry_max;
             norm_watermark_pending = true;
         }
@@ -448,13 +462,17 @@ void zmq::norm_engine_t::in_event()
             case NORM_TX_WATERMARK_COMPLETED:
                 if (NORM_ACK_SUCCESS == NormGetAckingStatus(norm_session))
                 {
-                    // Everyone acknowledged, so we can move forward
-                    norm_watermark_pending = false;
-                    norm_stream_buffer_count -= (norm_stream_buffer_max / 2);
-                    if (!norm_tx_ready)
+                    if (norm_watermark_pending)
                     {
-                        norm_tx_ready = true;
-                        send_data();
+                        // We were being flow controlled.  Everyone
+                        // acknowledged so we can move forward.
+                        norm_watermark_pending = false;
+                        norm_stream_buffer_count -= (norm_stream_buffer_max / 2);
+                        if (!norm_tx_ready)
+                        {
+                            norm_tx_ready = true;
+                            send_data();
+                        }
                     }
                 }
                 else if (norm_ack_retry_count > 0)
@@ -474,7 +492,7 @@ void zmq::norm_engine_t::in_event()
                     }
                     else
                     {
-                        // Assume the receiver has quit and remove from acking list
+                        // Assume the non-acking receiver(s) quit and remove from acking list
                         NormAckingStatus ackingStatus;
                         NormNodeId prevNodeId = NORM_NODE_NONE;
                         NormNodeId nodeId = NORM_NODE_NONE; // init iteration
@@ -492,6 +510,18 @@ void zmq::norm_engine_t::in_event()
                                 NormNodeId tempId = nodeId;
                                 nodeId = prevNodeId;
                                 prevNodeId = tempId;
+                            }
+                        }
+                        if (norm_watermark_pending)
+                        {
+                            // We were being flow controlled. Move
+                            // forward for remaining receivers.
+                            norm_watermark_pending = false;
+                            norm_stream_buffer_count -= (norm_stream_buffer_max / 2);
+                            if (!norm_tx_ready)
+                            {
+                                norm_tx_ready = true;
+                                send_data();
                             }
                         }
                     }

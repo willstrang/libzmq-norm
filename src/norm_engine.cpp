@@ -15,7 +15,10 @@ zmq::norm_engine_t::norm_engine_t(io_thread_t*     parent_,
    zmq_encoder(0), norm_tx_stream(NORM_OBJECT_INVALID), 
    tx_first_msg(true), tx_more_bit(false), 
    zmq_output_ready(false), norm_tx_ready(false), 
-   tx_index(0), tx_len(0),
+   tx_index(0), tx_len(0), norm_acking(false),
+   norm_segment_size(0), norm_stream_buffer_max(0), norm_stream_buffer_count(0),
+   norm_stream_bytes_remain(0), norm_watermark_pending(false),
+   norm_ack_retry_max(1), norm_ack_retry_count(0),
    zmq_input_ready(false)  
 {
     int rc = tx_msg.init();
@@ -151,10 +154,17 @@ int zmq::norm_engine_t::init(const char* network_, bool send, bool recv)
     
     if (send)
     {
+        UINT16 normSegmentSize = 1400;  // NORM_DATA payload size
+        UINT16 normNumData = 16;   // FEC block size (user data packets per block)
+        UINT16 normNumParity = 4;  // Number of FEC parity packets _computed_ per block
+        unsigned int normTxBufferSize = 2*1024*1024;
+        unsigned int normStreamBufferSize = 2*1024*1024;
+        
+        
         // Pick a random sender instance id (aka norm sender session id)
         NormSessionId instanceId = NormGetRandomSessionId();
         // TBD - provide "options" for some NORM sender parameters
-        if (!NormStartSender(norm_session, instanceId, 2*1024*1024, 1400, 16, 4))
+        if (!NormStartSender(norm_session, instanceId, normTxBufferSize, normSegmentSize, normNumData, normNumParity))
         {
             // errno set by whatever failed
             int savedErrno = errno;
@@ -167,7 +177,7 @@ int zmq::norm_engine_t::init(const char* network_, bool send, bool recv)
         NormSetCongestionControl(norm_session, true);
         norm_tx_ready = true;
         is_sender = true;   
-        if (NORM_OBJECT_INVALID == (norm_tx_stream = NormStreamOpen(norm_session, 2*1024*1024)))
+        if (NORM_OBJECT_INVALID == (norm_tx_stream = NormStreamOpen(norm_session, normStreamBufferSize)))
         {
             // errno set by whatever failed
             int savedErrno = errno;
@@ -177,6 +187,17 @@ int zmq::norm_engine_t::init(const char* network_, bool send, bool recv)
             errno = savedErrno;
             return -1;
         }
+        
+        // Init variables related to ack-based flow control
+        // (norm_acking MUST be set "true" for this to be used)
+        norm_acking = false;
+        norm_segment_size = normSegmentSize;
+        norm_stream_buffer_max = NormGetStreamBufferSegmentCount(normStreamBufferSize, normSegmentSize, normNumData);
+        norm_stream_buffer_max -= normNumData;  // a little safety margin (perhaps not necessary)
+        norm_stream_buffer_count = 0;
+        norm_stream_bytes_remain = 0;
+        norm_watermark_pending = false;
+        
     }
     
     //NormSetMessageTrace(norm_session, true);
@@ -284,7 +305,10 @@ void zmq::norm_engine_t::send_data()
                     // Note NORM_FLUSH_ACTIVE makes NORM fairly chatty for low duty cycle messaging
                     // but makes sure content is delivered quickly.  Positive acknowledgements
                     // with flush override would make NORM more succinct here
-                    NormStreamFlush(norm_tx_stream, true, NORM_FLUSH_ACTIVE);
+                    if (norm_acking)
+                        stream_flush(true, NORM_FLUSH_ACTIVE);
+                    else
+                        NormStreamFlush(norm_tx_stream, true, NORM_FLUSH_ACTIVE);
                 }
                 // Need to pull and load a new message to send
                 if (-1 == zmq_session->pull_msg(&tx_msg))
@@ -317,10 +341,14 @@ void zmq::norm_engine_t::send_data()
         if (tx_index < tx_len)
         {
             // We have data in our tx_buffer to send, so write it to the stream
-            tx_index += NormStreamWrite(norm_tx_stream, tx_buffer + tx_index, tx_len - tx_index);
+            if (norm_acking)
+                tx_index += stream_write(tx_buffer + tx_index, tx_len - tx_index);
+            else
+                tx_index += NormStreamWrite(norm_tx_stream, tx_buffer + tx_index, tx_len - tx_index);
             if (tx_index < tx_len)
             {
                 // NORM stream buffer full, wait for NORM_TX_QUEUE_VACANCY
+                // (or NORM_TX_WATERMARK_COMPLETED if norm_acking)
                 norm_tx_ready = false;
                 break;
             }
@@ -328,6 +356,75 @@ void zmq::norm_engine_t::send_data()
         }
     }  // end while (zmq_output_ready && norm_tx_ready)
 }  // end zmq::norm_engine_t::send_data()
+
+
+// This writes to the tx norm_stream and does the accounting needed for
+// ack-based flow control.  The number of bytes written is returned.
+// (If too much unacknowledged content is outstanding, the amount
+//  of data written limited.)
+
+unsigned int zmq::norm_engine_t::stream_write(const char* buffer, unsigned int numBytes)
+{
+    // This method uses NormStreamWrite(), but limits writes by explicit ACK-based flow control status
+    if (norm_stream_buffer_count < norm_stream_buffer_max)
+    {
+        // 1) How many buffer bytes are available?
+        unsigned int bytesAvailable = norm_segment_size * (norm_stream_buffer_max - norm_stream_buffer_count);
+        bytesAvailable -= norm_stream_bytes_remain;  // unflushed segment portiomn
+        if (numBytes <= bytesAvailable) 
+        {
+            unsigned int totalBytes = numBytes + norm_stream_bytes_remain;
+            unsigned int numSegments = totalBytes / norm_segment_size;
+            norm_stream_bytes_remain = totalBytes % norm_segment_size;
+            norm_stream_buffer_count += numSegments;
+        }
+        else
+        {
+            numBytes = bytesAvailable;
+            norm_stream_buffer_count = norm_stream_buffer_max;        
+        }
+        // 2) Write to the stream
+        unsigned int bytesWritten = NormStreamWrite(norm_tx_stream, buffer, numBytes);
+        //ASSERT(bytesWritten == numBytes);  // this could happen if timer-based flow control is left enabled
+        // 3) Check if we need to issue a watermark ACK request?
+        if (!norm_watermark_pending && (norm_stream_buffer_count >= (norm_stream_buffer_max / 2)))
+        {
+            //TRACE("norm_engine_t::WriteToNormStream() initiating watermark ACK request (buffer count:%lu max:%lu usage:%u)...\n",
+            //            norm_stream_buffer_count, norm_stream_buffer_max, NormStreamGetBufferUsage(norm_tx_stream));
+            NormSetWatermark(norm_session, norm_tx_stream);
+            norm_ack_retry_count = norm_ack_retry_max;
+            norm_watermark_pending = true;
+        }
+        return bytesWritten;
+    }
+    else
+    {
+        return 0;
+    }
+}  // end zmq::norm_engine_t::stream_write()
+
+
+void zmq::norm_engine_t::stream_flush(bool eom, NormFlushMode flushMode)
+{
+    // NormStreamFlush always will transmit pending runt segments, if applicable
+    // (thus we need to manage our buffer counting accordingly if pending bytes remain)
+    NormStreamFlush(norm_tx_stream, eom, flushMode);
+    if (0 != norm_stream_bytes_remain)
+    {
+        // The flush forces the runt segment out, so we increment our buffer usage count
+        norm_stream_buffer_count++;
+        norm_stream_bytes_remain = 0;
+        if (!norm_watermark_pending && (norm_stream_buffer_count >= (norm_stream_buffer_max >> 1)))
+        {
+            //TRACE("norm_engine_t::stream_flush() initiating watermark ACK request (buffer count:%lu max:%lu usage:%u)...\n",
+            //       norm_stream_buffer_count, norm_stream_buffer_max);
+            NormSetWatermark(norm_session, norm_tx_stream, NormStreamGetBufferUsage(norm_tx_stream));
+            norm_ack_retry_count = norm_ack_retry_max;
+            norm_watermark_pending = true;
+        }
+    } 
+}  // end zmq::norm_engine_t::stream_flush()
+
 
 void zmq::norm_engine_t::in_event()
 {
@@ -344,6 +441,33 @@ void zmq::norm_engine_t::in_event()
                 {
                     norm_tx_ready = true;
                     send_data();
+                }
+                break;
+                
+            case NORM_TX_WATERMARK_COMPLETED:
+                if (NORM_ACK_SUCCESS == NormGetAckingStatus(norm_session))
+                {
+                    // Everyone acknowledged, so we can move forward
+                    norm_watermark_pending = false;
+                    norm_stream_buffer_count -= (norm_stream_buffer_max / 2);
+                    if (!norm_tx_ready)
+                    {
+                        norm_tx_ready = true;
+                        send_data();
+                    }
+                }
+                else if (norm_ack_retry_count > 0)
+                {
+                    // Someone didn't acknowledge but we're configured to try again
+                    // Reset the watermark acknowledgement request
+                    NormResetWatermark(norm_session);
+                    norm_ack_retry_count--;
+                }
+                else
+                {
+                    // Find out who didn't acknowledge and kick them out
+                    // (If this is a unicast session, then just reset indefinitely?)
+                    
                 }
                 break;
 

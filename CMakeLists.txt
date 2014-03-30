@@ -42,10 +42,11 @@ if(POLLER STREQUAL "")
                 else()
                     if(CMAKE_HOST_WIN32)
                         set(CMAKE_REQUIRED_INCLUDES winsock2.h)
+                        set(HAVE_SELECT 1)
                     else()
                         set(CMAKE_REQUIRED_INCLUDES sys/select.h)
+                        check_function_exists(select HAVE_SELECT)
                     endif()
-                    check_function_exists(select HAVE_SELECT)
                     set(CMAKE_REQUIRED_INCLUDES )
                     if(HAVE_SELECT)
                         set(POLLER "select")
@@ -121,6 +122,10 @@ endif()
 set(CMAKE_REQUIRED_LIBRARIES rt)
 check_function_exists(clock_gettime HAVE_CLOCK_GETTIME)
 set(CMAKE_REQUIRED_LIBRARIES )
+
+set(CMAKE_REQUIRED_INCLUDES unistd.h)
+check_function_exists(fork HAVE_FORK)
+set(CMAKE_REQUIRED_INCLUDES )
 
 set(CMAKE_REQUIRED_INCLUDES sys/time.h)
 check_function_exists(gethrtime HAVE_GETHRTIME)
@@ -543,7 +548,8 @@ if(MSVC)
   set_target_properties(libzmq PROPERTIES
     PUBLIC_HEADER "${public_headers}"
     RELEASE_POSTFIX "${_zmq_COMPILER}-mt-${ZMQ_VERSION_MAJOR}_${ZMQ_VERSION_MINOR}_${ZMQ_VERSION_PATCH}"
-    DEBUG_POSTFIX "${_zmq_COMPILER}-mt-gd-${ZMQ_VERSION_MAJOR}_${ZMQ_VERSION_MINOR}_${ZMQ_VERSION_PATCH}")
+    DEBUG_POSTFIX "${_zmq_COMPILER}-mt-gd-${ZMQ_VERSION_MAJOR}_${ZMQ_VERSION_MINOR}_${ZMQ_VERSION_PATCH}"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin")
   add_library(libzmq-static STATIC ${sources})
   set_target_properties(libzmq-static PROPERTIES
     PUBLIC_HEADER "${public_headers}"

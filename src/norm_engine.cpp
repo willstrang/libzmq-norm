@@ -373,8 +373,7 @@ unsigned int zmq::norm_engine_t::stream_write(const char* buffer, unsigned int n
     if (norm_stream_buffer_count < norm_stream_buffer_max)
     {
         // 1) How many buffer bytes are available?
-        unsigned int bytesAvailable = norm_segment_size *
-            (norm_stream_buffer_max - norm_stream_buffer_count);
+        unsigned int bytesAvailable = norm_segment_size * (norm_stream_buffer_max - norm_stream_buffer_count);
         bytesAvailable -= norm_stream_bytes_remain;  // unflushed segment portiomn
         if (numBytes <= bytesAvailable) 
         {
@@ -392,8 +391,7 @@ unsigned int zmq::norm_engine_t::stream_write(const char* buffer, unsigned int n
         unsigned int bytesWritten = NormStreamWrite(norm_tx_stream, buffer, numBytes);
         //ASSERT(bytesWritten == numBytes);  // this could happen if timer-based flow control is left enabled
         // 3) Check if we need to issue a watermark ACK request?
-        if (!norm_watermark_pending &&
-            (norm_stream_buffer_count >= (norm_stream_buffer_max / 2)))
+        if (!norm_watermark_pending && (norm_stream_buffer_count >= (norm_stream_buffer_max / 2)))
         {
             //TRACE("norm_engine_t::WriteToNormStream() initiating watermark ACK request (buffer count:%lu max:%lu usage:%u)...\n",
             //            norm_stream_buffer_count, norm_stream_buffer_max, NormStreamGetBufferUsage(norm_tx_stream));
@@ -412,7 +410,7 @@ unsigned int zmq::norm_engine_t::stream_write(const char* buffer, unsigned int n
 
 void zmq::norm_engine_t::stream_flush(bool eom, NormFlushMode flushMode)
 {
-    // NormStreamFlush always transmits pending runt segments, if applicable
+    // NormStreamFlush always will transmit pending runt segments, if applicable
     // (thus we need to manage our buffer counting accordingly if pending bytes remain)
     if (norm_watermark_pending)
     {
@@ -431,8 +429,7 @@ void zmq::norm_engine_t::stream_flush(bool eom, NormFlushMode flushMode)
    
     if (0 != norm_stream_bytes_remain)
     {
-        // The flush forces the runt segment out, so we increment our buffer
-        // usage count
+        // The flush forces the runt segment out, so we increment our buffer usage count
         norm_stream_buffer_count++;
         norm_stream_bytes_remain = 0;
         if (!norm_watermark_pending && (norm_stream_buffer_count >= (norm_stream_buffer_max >> 1)))
@@ -449,79 +446,29 @@ void zmq::norm_engine_t::stream_flush(bool eom, NormFlushMode flushMode)
 
 void zmq::norm_engine_t::in_event()
 {
-    // This means a NormEvent is pending, so call NormGetNextEvent() and handle
+    // This means a NormEvent is probably pending, 
+    // so call NormGetNextEvent() and handle 
     NormEvent event;
     if (NormGetNextEvent(norm_instance, &event, false))
     {
         switch(event.type)
         {
-        case NORM_TX_QUEUE_VACANCY:
-        case NORM_TX_QUEUE_EMPTY:
-            if (!norm_tx_ready)
-            {
-                norm_tx_ready = true;
-                send_data();
-            }
-            break;
-
-        case NORM_TX_WATERMARK_COMPLETED:
-            if (NORM_ACK_SUCCESS == NormGetAckingStatus(norm_session))
-            {
-                if (norm_watermark_pending)
+            case NORM_TX_QUEUE_VACANCY:
+            case NORM_TX_QUEUE_EMPTY:
+                if (!norm_tx_ready)
                 {
-                    // We were being flow controlled.  Everyone
-                    // acknowledged so we can move forward.
-                    norm_watermark_pending = false;
-                    norm_stream_buffer_count -= (norm_stream_buffer_max / 2);
-                    if (!norm_tx_ready)
-                    {
-                        norm_tx_ready = true;
-                        send_data();
-                    }
+                    norm_tx_ready = true;
+                    send_data();
                 }
-            }
-            else if (norm_ack_retry_count > 0)
-            {
-                // Someone didn't acknowledge but we're configured to try again
-                // Reset the watermark acknowledgement request
-                NormResetWatermark(norm_session);
-                norm_ack_retry_count--;
-            }
-            else
-            {
-                // Find out who didn't acknowledge and kick them out
-                if (is_unicast)
+                break;
+                
+            case NORM_TX_WATERMARK_COMPLETED:
+                if (NORM_ACK_SUCCESS == NormGetAckingStatus(norm_session))
                 {
-                    // (If this is a unicast session, then reset indefinitely?)
-                    NormResetWatermark(norm_session);
-                }
-                else
-                {
-                    // Assume the non-acking receiver(s) quit and remove from acking list
-                    NormAckingStatus ackingStatus;
-                    NormNodeId prevNodeId = NORM_NODE_NONE;
-                    NormNodeId nodeId = NORM_NODE_NONE; // init iteration
-                    while (NormGetNextAckingNode(norm_session, &nodeId, &ackingStatus))
-                    {
-                        if (NORM_ACK_SUCCESS != ackingStatus)
-                        {
-                            NormRemoveAckingNode(norm_session, nodeId);
-                            // prevent underlying iteration reset
-                            nodeId = prevNodeId;
-                        }
-                        else
-                        {
-                            // This keeps the underlying NORM iterator from  
-                            // resetting when an acking node is removed.
-                            NormNodeId tempId = nodeId;
-                            nodeId = prevNodeId;
-                            prevNodeId = tempId;
-                        }
-                    }
                     if (norm_watermark_pending)
                     {
-                        // We were being flow controlled. Move
-                        // forward for remaining receivers.
+                        // We were being flow controlled.  Everyone
+                        // acknowledged so we can move forward.
                         norm_watermark_pending = false;
                         norm_stream_buffer_count -= (norm_stream_buffer_max / 2);
                         if (!norm_tx_ready)
@@ -531,59 +478,111 @@ void zmq::norm_engine_t::in_event()
                         }
                     }
                 }
-            }
-            break;
+                else if (norm_ack_retry_count > 0)
+                {
+                    // Someone didn't acknowledge but we're configured to try
+                    // again. Reset the watermark acknowledgement request
+                    NormResetWatermark(norm_session);
+                    norm_ack_retry_count--;
+                }
+                else
+                {
+                    // Find out who didn't acknowledge and kick them out
+                    if (is_unicast)
+                    {
+                        // If it's a unicast session, then reset indefinitely?
+                        NormResetWatermark(norm_session);
+                    }
+                    else
+                    {
+                        // Assume the non-acking receiver(s) quit and remove from acking list
+                        NormAckingStatus ackingStatus;
+                        NormNodeId prevNodeId = NORM_NODE_NONE;
+                        NormNodeId nodeId = NORM_NODE_NONE; // init iteration
+                        while (NormGetNextAckingNode(norm_session, &nodeId, &ackingStatus))
+                        {
+                            if (NORM_ACK_SUCCESS != ackingStatus)
+                            {
+                                NormRemoveAckingNode(norm_session, nodeId);
+                                // prevent underlying iteration reset
+                                nodeId = prevNodeId;
+                            }
+                            else
+                            {
+                                // This keeps the underlying NORM iterator from
+                                // resetting when an acking node is removed.
+                                NormNodeId tempId = nodeId;
+                                nodeId = prevNodeId;
+                                prevNodeId = tempId;
+                            }
+                        }
+                        if (norm_watermark_pending)
+                        {
+                            // We were being flow controlled. Move
+                            // forward for remaining receivers.
+                            norm_watermark_pending = false;
+                            norm_stream_buffer_count -= (norm_stream_buffer_max / 2);
+                            if (!norm_tx_ready)
+                            {
+                                norm_tx_ready = true;
+                                send_data();
+                            }
+                        }
+                    }
+                }
+                break;
 
-        case NORM_REMOTE_SENDER_NEW:
-            if (is_twoway) {
-                NormNodeId remoteId = NormNodeGetId(event.sender);
-#ifdef ZMQ_DEBUG_NORM
-                bool worked =
-#endif
-                    NormAddAckingNode(norm_session, remoteId);
-#ifdef ZMQ_DEBUG_NORM
-                std::cout << "NormAddAckingNode(" << (unsigned)remoteId << ")"
-                          << (worked ? " WORKED" : " FAILED")
-                          << std::endl << std::flush;
-#endif
-            }
-            break;
+            case NORM_RX_OBJECT_NEW:
+                //break;
+            case NORM_RX_OBJECT_UPDATED:
+                recv_data(event.object);
+                break;
 
-        case NORM_RX_OBJECT_NEW:
-            //break;
-        case NORM_RX_OBJECT_UPDATED:
-            recv_data(event.object);
-            break;
-            
-        case NORM_RX_OBJECT_ABORTED:
-        {
-            NormRxStreamState* rxState = (NormRxStreamState*)NormObjectGetUserData(event.object);
-            if (NULL != rxState)
+            case NORM_RX_OBJECT_ABORTED:
             {
-                // Remove the state from the list it's in
-                // This is now unnecessary since deletion takes care of
-                // list removal, but in the interest of being clear ...
-                NormRxStreamState::List* list = rxState->AccessList();
-                if (NULL != list) list->Remove(*rxState);
+                NormRxStreamState* rxState = (NormRxStreamState*)NormObjectGetUserData(event.object);
+                if (NULL != rxState)
+                {
+                    // Remove the state from the list it's in
+                    // This is now unnecessary since deletion takes care of
+                    // list removal, but in the interest of being clear ...
+                    NormRxStreamState::List* list = rxState->AccessList();
+                    if (NULL != list) list->Remove(*rxState);
+                }
+                delete rxState;
+                break;
             }
-            delete rxState;
-            break;
-        }           
-        case NORM_REMOTE_SENDER_INACTIVE:
-            // Here we free resources used for this formerly active sender.
-            // Note w/ NORM_SYNC_STREAM, if sender reactivates, we may
-            //  get some messages delivered twice.  NORM_SYNC_CURRENT would
-            // mitigate that but might miss data at startup. Always tradeoffs.
-            // Instead of immediately deleting, we could instead initiate a
-            // user configurable timeout here to wait some amount of time
-            // after this event to declare the remote sender truly dead
-            // and delete its state???
-            NormNodeDelete(event.sender);  
-            break;
+
+            case NORM_REMOTE_SENDER_NEW:
+                if (is_twoway) {
+                    NormNodeId remoteId = NormNodeGetId(event.sender);
+#ifdef ZMQ_DEBUG_NORM
+                    bool worked =
+#endif
+                        NormAddAckingNode(norm_session, remoteId);
+#ifdef ZMQ_DEBUG_NORM
+                    std::cout << "NormAddAckingNode(" << (unsigned)remoteId
+                              << ")" << (worked ? " WORKED" : " FAILED")
+                              << std::endl << std::flush;
+#endif
+                }
+                break;
+
+            case NORM_REMOTE_SENDER_INACTIVE:
+                // Here we free resources used for this formerly active sender.
+                // Note w/ NORM_SYNC_STREAM, if sender reactivates, we may
+                //  get some messages delivered twice.  NORM_SYNC_CURRENT would
+                // mitigate that but might miss data at startup. Always tradeoffs.
+                // Instead of immediately deleting, we could instead initiate a
+                // user configurable timeout here to wait some amount of time
+                // after this event to declare the remote sender truly dead
+                // and delete its state???
+                NormNodeDelete(event.sender);  
+                break;
             
-        default:
-            // We ignore some NORM events 
-            break;
+            default:
+                // We ignore some NORM events 
+                break;
         }  // end switch(event.type)
     }
 }  // zmq::norm_engine_t::in_event()
@@ -640,7 +639,8 @@ void zmq::norm_engine_t::recv_data(NormObjectHandle object)
     // This loop repeats until we've read all data available from "rx ready"
     // inbound streams and pushed any accumulated messages we can up to the
     // zmq session.
-    while (!rx_ready_list.IsEmpty() || (zmq_input_ready && !msg_ready_list.IsEmpty()))
+    while (!rx_ready_list.IsEmpty() |
+           (zmq_input_ready && !msg_ready_list.IsEmpty()))
     {
         // Iterate through our rx_ready streams, reading data into the decoder
         // (This services incoming "rx ready" streams in a round-robin fashion)

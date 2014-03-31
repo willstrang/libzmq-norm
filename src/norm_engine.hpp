@@ -8,7 +8,7 @@
 
 #if defined ZMQ_HAVE_NORM
 
-#define ZMQ_DEBUG_NORM
+// #define ZMQ_DEBUG_NORM
 
 #include "norm_address.hpp"
 #include "io_object.hpp"

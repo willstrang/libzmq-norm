@@ -231,9 +231,18 @@ int zmq::socket_base_t::check_protocol (const std::string &protocol_)
     //  Check whether socket type and transport protocol match.
     //  Specifically, multicast protocols can't be combined with
     //  bi-directional messaging patterns (socket types).
-    if ((protocol_ == "pgm" || protocol_ == "epgm" || protocol_ == "norm") &&
+    //if ((protocol_ == "pgm" || protocol_ == "epgm" || protocol_ == "norm") &&
+    if ((protocol_ == "pgm" || protocol_ == "epgm") &&
           options.type != ZMQ_PUB && options.type != ZMQ_SUB &&
           options.type != ZMQ_XPUB && options.type != ZMQ_XSUB) {
+        errno = ENOCOMPATPROTO;
+        return -1;
+    }
+    // NORM supports both multicast and bi-directional (only ZMQ_PAIR so far)
+    if ((protocol_ == "norm") &&
+        (options.type != ZMQ_PAIR && // options.type != ZMQ_ROUTER && 
+         options.type != ZMQ_PUB && options.type != ZMQ_SUB &&
+         options.type != ZMQ_XPUB && options.type != ZMQ_XSUB)) {
         errno = ENOCOMPATPROTO;
         return -1;
     }
@@ -1345,6 +1354,7 @@ void zmq::socket_base_t::monitor_event (zmq_event_t event_, const std::string& a
         zmq_msg_init_size (&msg, addr_.size());
         memcpy(zmq_msg_data(&msg), addr_.c_str(), addr_.size());
         zmq_sendmsg (monitor_socket, &msg, 0);
+        zmq_msg_close (&msg);
     }
 }
 

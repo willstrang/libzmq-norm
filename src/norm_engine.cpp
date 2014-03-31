@@ -7,15 +7,22 @@
 #include "session_base.hpp"
 #include "v2_protocol.hpp"
 
+#if defined ZMQ_DEBUG_NORM
+#include <iostream>
+#endif
+
 zmq::norm_engine_t::norm_engine_t(io_thread_t*     parent_,
                                   const options_t& options_)
  : io_object_t(parent_), zmq_session(NULL), options(options_),  
    norm_instance(NORM_INSTANCE_INVALID), norm_session(NORM_SESSION_INVALID), 
-   is_sender(false), is_receiver(false),
+   is_unicast(false), is_sender(false), is_receiver(false), is_twoway(false),
    zmq_encoder(0), norm_tx_stream(NORM_OBJECT_INVALID), 
    tx_first_msg(true), tx_more_bit(false), 
    zmq_output_ready(false), norm_tx_ready(false), 
-   tx_index(0), tx_len(0),
+   tx_index(0), tx_len(0), norm_acking(false), norm_watermark_pending(false),
+   norm_segment_size(0), norm_stream_buffer_max(0),
+   norm_stream_buffer_count(0), norm_stream_bytes_remain(0),
+   norm_ack_retry_max(1), norm_ack_retry_count(0),
    zmq_input_ready(false)  
 {
     int rc = tx_msg.init();
@@ -30,60 +37,23 @@ zmq::norm_engine_t::~norm_engine_t()
 
 int zmq::norm_engine_t::init(const char* network_, bool send, bool recv)
 {
-    // Parse the "network_" address int "iface", "addr", and "port"
+    // both send & recv set means a 2-way messaging model, vs 1-way pub/sub
+    is_twoway = send && recv;
+
+    // Parse the "network_" address into id, iface, IP/host addr, and port
     // norm endpoint format: [id,][<iface>;]<addr>:<port>
-    // First, look for optional local NormNodeId
-    // (default NORM_NODE_ANY causes NORM to use host IP addr for NormNodeId)
-    NormNodeId localId = NORM_NODE_ANY;
-    const char* ifacePtr = strchr(network_, ',');
-    if (NULL != ifacePtr)
-    {
-        size_t idLen = ifacePtr - network_;
-        if (idLen > 31) idLen = 31;
-        char idText[32];
-        strncpy(idText, network_, idLen);
-        idText[idLen] = '\0';
-        localId = (NormNodeId)atoi(idText);
-        ifacePtr++;
-    }
-    else
-    {
-        ifacePtr = network_;
-    }
-    
-    // Second, look for optional multicast ifaceName
-    char ifaceName[256];
-    const char* addrPtr = strchr(ifacePtr, ';');
-    if (NULL != addrPtr)
-    {
-        size_t ifaceLen = addrPtr - ifacePtr;
-        if (ifaceLen > 255) ifaceLen = 255;  // return error instead?
-        strncpy(ifaceName, ifacePtr, ifaceLen);
-        ifaceName[ifaceLen] = '\0';
-        ifacePtr = ifaceName;
-        addrPtr++;
-    }
-    else
-    {
-        addrPtr = ifacePtr;
-        ifacePtr = NULL;
-    }
-    
-    // Finally, parse IP address and port number
-    const char* portPtr = strrchr(addrPtr, ':');
-    if (NULL == portPtr)
-    {
-        errno = EINVAL;
+
+    // TBD - How to determine local_ and ipv6_ to pass into resolve ()?
+    if (norm_address.resolve (network_, false, false) < 0) {
+        // errno set by whatever caused resolve () to fail
         return -1;
     }
     
-    char addr[256];
-    size_t addrLen = portPtr - addrPtr;
-    if (addrLen > 255) addrLen = 255;
-    strncpy(addr, addrPtr, addrLen);
-    addr[addrLen] = '\0';
-    portPtr++;
-    unsigned short portNumber = atoi(portPtr);
+    // Require unicast address for 2-way connection
+    if (is_twoway && !NormIsUnicastAddress (norm_address.getHostName ())) {
+        errno = EINVAL;
+        return -1;
+    }
     
     if (NORM_INSTANCE_INVALID == norm_instance)
     {
@@ -95,13 +65,16 @@ int zmq::norm_engine_t::init(const char* network_, bool send, bool recv)
     }
     
     // TBD - What do we use for our local NormNodeId?
-    //       (for now we use automatic, IP addr based assignment or passed in 'id')
+    //  (for now we use automatic, IP addr based assignment or passed in 'id')
     //       a) Use ZMQ Identity somehow?
     //       b) Add function to use iface addr
     //       c) Randomize and implement a NORM session layer
     //          conflict detection/resolution protocol
     
-    norm_session = NormCreateSession(norm_instance, addr, portNumber, localId);
+    norm_session = NormCreateSession(norm_instance,
+                                     norm_address.getHostName (),
+                                     norm_address.getPortNumber (),
+                                     norm_address.getNormNodeId ());
     if (NORM_SESSION_INVALID == norm_session)
     {
         int savedErrno = errno;
@@ -110,33 +83,48 @@ int zmq::norm_engine_t::init(const char* network_, bool send, bool recv)
         errno = savedErrno;
         return -1;
     }
+
     // There's many other useful NORM options that could be applied here
-    if (NormIsUnicastAddress(addr))
+    if (NormIsUnicastAddress(norm_address.getHostName ()))
     {
+        is_unicast = true;
+        norm_acking = true;
         NormSetDefaultUnicastNack(norm_session, true);
     }
     else
     {
-        // These only apply for multicast sessions
-        //NormSetTTL(norm_session, options.multicast_hops);  // ZMQ default is 1
-        NormSetTTL(norm_session, 255);  // since the ZMQ_MULTICAST_HOPS socket option isn't well-supported
-        NormSetRxPortReuse(norm_session, true);  // port reuse doesn't work for non-connected unicast
-        NormSetLoopback(norm_session, true);  // needed when multicast users on same machine
-        if (NULL != ifacePtr)
+        // These NORM options only apply for multicast sessions
+        // ZMQ default hops is 1
+        //NormSetTTL(norm_session, options.multicast_hops);
+        // since the ZMQ_MULTICAST_HOPS socket option isn't well-supported
+        NormSetTTL(norm_session, 255);
+        // port reuse doesn't work for non-connected unicast
+        NormSetRxPortReuse(norm_session, true);
+        // needed when multicast users on same machine
+        NormSetLoopback(norm_session, true);
+
+        if (norm_address.isIfaceName ())
         {
-            // Note a bad interface may not be caught until sender or receiver start
-            // (Since sender/receiver is not yet started, this always succeeds here)
-            NormSetMulticastInterface(norm_session, ifacePtr);
+            // A bad interface may not be caught until sender or receiver start
+            // norm_address.resolve () uses tcp_address_t::resolve_interface ()
+            // to validate the IfaceName, but that doesn't check that it is
+            // multicast capable.
+            // (Since sender/receiver is not yet started, always succeeds here)
+            NormSetMulticastInterface(norm_session,
+                                      norm_address.getIfaceName ());
         }
     }
-    
+
     if (recv)
     {
-        // The alternative NORM_SYNC_CURRENT here would provide "instant"
-        // receiver sync to the sender's _current_ message transmission.
-        // NORM_SYNC_STREAM tries to get everything the sender has cached/buffered
-        NormSetDefaultSyncPolicy(norm_session, NORM_SYNC_STREAM);
-        if (!NormStartReceiver(norm_session, 2*1024*1024))
+        // For 2-way patterns, NORM_SYNC_CURRENT provides "instant" receiver
+        // sync to the sender's _current_ message transmission. For pub/sub,
+        // NORM_SYNC_STREAM tries for everything the sender has cached/buffered
+        NormSetDefaultSyncPolicy(norm_session, (is_twoway ? NORM_SYNC_CURRENT
+                                                : NORM_SYNC_STREAM));
+        unsigned long rcvbuf = (is_twoway && options.rcvbuf != 0 ?
+                                options.rcvbuf : 2*1024*1024);
+        if (!NormStartReceiver(norm_session, rcvbuf))
         {
             // errno set by whatever failed
             int savedErrno = errno;
@@ -151,10 +139,22 @@ int zmq::norm_engine_t::init(const char* network_, bool send, bool recv)
     
     if (send)
     {
+        UINT16 normSegmentSize = 1400;  // NORM_DATA payload size
+        // FEC block size (user data packets per block)
+        UINT16 normNumData = 16;
+        // Number of FEC parity packets _computed_ per block
+        UINT16 normNumParity = 4;
+        unsigned int normTxBufferSize = 2*1024*1024;
+        unsigned int normStreamBufferSize = 2*1024*1024;
+        
+        
         // Pick a random sender instance id (aka norm sender session id)
-        NormSessionId instanceId = NormGetRandomSessionId();
+        NormSessionId session_id = NormGetRandomSessionId();
         // TBD - provide "options" for some NORM sender parameters
-        if (!NormStartSender(norm_session, instanceId, 2*1024*1024, 1400, 16, 4))
+        unsigned long sndbuf = (is_twoway && options.sndbuf != 0 ?
+                                options.sndbuf : normTxBufferSize);
+        if (!NormStartSender(norm_session, session_id, sndbuf, 
+                             normSegmentSize, normNumData, normNumParity))
         {
             // errno set by whatever failed
             int savedErrno = errno;
@@ -166,8 +166,9 @@ int zmq::norm_engine_t::init(const char* network_, bool send, bool recv)
         }    
         NormSetCongestionControl(norm_session, true);
         norm_tx_ready = true;
-        is_sender = true;   
-        if (NORM_OBJECT_INVALID == (norm_tx_stream = NormStreamOpen(norm_session, 2*1024*1024)))
+        is_sender = true;
+        norm_tx_stream = NormStreamOpen(norm_session, normStreamBufferSize);
+        if (NORM_OBJECT_INVALID == norm_tx_stream)
         {
             // errno set by whatever failed
             int savedErrno = errno;
@@ -177,11 +178,32 @@ int zmq::norm_engine_t::init(const char* network_, bool send, bool recv)
             errno = savedErrno;
             return -1;
         }
+        
+        // Init variables related to ack-based flow control
+        // (norm_acking MUST be set "true" for this to be used)
+        norm_segment_size = normSegmentSize;
+        norm_stream_buffer_max = NormGetStreamBufferSegmentCount(normStreamBufferSize, normSegmentSize, normNumData);
+        // a little safety margin (perhaps not necessary)
+        norm_stream_buffer_max -= normNumData;
+        norm_stream_buffer_count = 0;
+        norm_stream_bytes_remain = 0;
+        norm_watermark_pending = false;
     }
     
-    //NormSetMessageTrace(norm_session, true);
-    //NormSetDebugLevel(3);
-    //NormOpenDebugLog(norm_instance, "normLog.txt");
+    if (is_twoway) {
+        // For 2-way models, push the norm "robustness factor" above default 20
+        NormSetTxRobustFactor(norm_session, 100);
+        NormSetDefaultRxRobustFactor(norm_session, 100);
+    }
+
+#if defined ZMQ_DEBUG_NORM
+    NormSetMessageTrace(norm_session, true);
+    NormSetDebugLevel(3);
+    char logfilename[32];
+    sprintf(logfilename, "normLog_%u.txt",
+            (unsigned) norm_address.getNormNodeId ());
+    NormOpenDebugLog(norm_instance, logfilename);
+#endif
     
     return 0;  // no error
 }  // end zmq::norm_engine_t::init()
@@ -278,18 +300,24 @@ void zmq::norm_engine_t::send_data()
                 else
                 {
                     // A prior message was completely written to stream, so
-                    // mark end-of-message and possibly flush (to force packet transmission,
-                    // even if it's not a full segment so message gets delivered quickly)
-                    // NormStreamMarkEom(norm_tx_stream);  // the flush below marks eom
-                    // Note NORM_FLUSH_ACTIVE makes NORM fairly chatty for low duty cycle messaging
-                    // but makes sure content is delivered quickly.  Positive acknowledgements
-                    // with flush override would make NORM more succinct here
-                    NormStreamFlush(norm_tx_stream, true, NORM_FLUSH_ACTIVE);
+                    // mark end-of-message and possibly flush (to force packet
+                    // transmission, even if it's not a full segment so message
+                    // gets delivered quickly)
+                    // NormStreamMarkEom(norm_tx_stream);
+                    // the flush below marks eom
+                    // Note NORM_FLUSH_ACTIVE makes NORM fairly chatty for low
+                    // duty cycle messaging, but makes sure messages are
+                    // delivered quickly.  Positive acknowledgements with flush
+                    // override would make NORM more succinct here
+                    if (norm_acking)
+                        stream_flush(true, NORM_FLUSH_ACTIVE);
+                    else
+                        NormStreamFlush(norm_tx_stream, true, NORM_FLUSH_ACTIVE);
                 }
                 // Need to pull and load a new message to send
                 if (-1 == zmq_session->pull_msg(&tx_msg))
                 {
-                    // We need to wait for "restart_output()" to be called by ZMQ 
+                    // We need to wait for a "restart_output()" call by ZMQ 
                     zmq_output_ready = false;
                     break;
                 }
@@ -317,10 +345,14 @@ void zmq::norm_engine_t::send_data()
         if (tx_index < tx_len)
         {
             // We have data in our tx_buffer to send, so write it to the stream
-            tx_index += NormStreamWrite(norm_tx_stream, tx_buffer + tx_index, tx_len - tx_index);
+            if (norm_acking)
+                tx_index += stream_write(tx_buffer + tx_index, tx_len - tx_index);
+            else
+                tx_index += NormStreamWrite(norm_tx_stream, tx_buffer + tx_index, tx_len - tx_index);
             if (tx_index < tx_len)
             {
                 // NORM stream buffer full, wait for NORM_TX_QUEUE_VACANCY
+                // (or NORM_TX_WATERMARK_COMPLETED if norm_acking)
                 norm_tx_ready = false;
                 break;
             }
@@ -329,19 +361,100 @@ void zmq::norm_engine_t::send_data()
     }  // end while (zmq_output_ready && norm_tx_ready)
 }  // end zmq::norm_engine_t::send_data()
 
+
+// This writes to the tx norm_stream and does the accounting needed for
+// ack-based flow control.  The number of bytes written is returned.
+// (If too much unacknowledged content is outstanding, the amount
+//  of data written limited.)
+
+unsigned int zmq::norm_engine_t::stream_write(const char* buffer, unsigned int numBytes)
+{
+    // This method uses NormStreamWrite(), but limits writes by explicit ACK-based flow control status
+    if (norm_stream_buffer_count < norm_stream_buffer_max)
+    {
+        // 1) How many buffer bytes are available?
+        unsigned int bytesAvailable = norm_segment_size *
+            (norm_stream_buffer_max - norm_stream_buffer_count);
+        bytesAvailable -= norm_stream_bytes_remain;  // unflushed segment portiomn
+        if (numBytes <= bytesAvailable) 
+        {
+            unsigned int totalBytes = numBytes + norm_stream_bytes_remain;
+            unsigned int numSegments = totalBytes / norm_segment_size;
+            norm_stream_bytes_remain = totalBytes % norm_segment_size;
+            norm_stream_buffer_count += numSegments;
+        }
+        else
+        {
+            numBytes = bytesAvailable;
+            norm_stream_buffer_count = norm_stream_buffer_max;        
+        }
+        // 2) Write to the stream
+        unsigned int bytesWritten = NormStreamWrite(norm_tx_stream, buffer, numBytes);
+        //ASSERT(bytesWritten == numBytes);  // this could happen if timer-based flow control is left enabled
+        // 3) Check if we need to issue a watermark ACK request?
+        if (!norm_watermark_pending &&
+            (norm_stream_buffer_count >= (norm_stream_buffer_max / 2)))
+        {
+            //TRACE("norm_engine_t::WriteToNormStream() initiating watermark ACK request (buffer count:%lu max:%lu usage:%u)...\n",
+            //            norm_stream_buffer_count, norm_stream_buffer_max, NormStreamGetBufferUsage(norm_tx_stream));
+            NormSetWatermark(norm_session, norm_tx_stream);
+            norm_ack_retry_count = norm_ack_retry_max;
+            norm_watermark_pending = true;
+        }
+        return bytesWritten;
+    }
+    else
+    {
+        return 0;
+    }
+}  // end zmq::norm_engine_t::stream_write()
+
+
+void zmq::norm_engine_t::stream_flush(bool eom, NormFlushMode flushMode)
+{
+    // NormStreamFlush always transmits pending runt segments, if applicable
+    // (thus we need to manage our buffer counting accordingly if pending bytes remain)
+    if (norm_watermark_pending)
+    {
+        NormStreamFlush(norm_tx_stream, eom, flushMode);
+    }
+    else if (NORM_FLUSH_ACTIVE == flushMode)
+    {
+        // we flush passive, because watermark forces active ack request
+        NormStreamFlush(norm_tx_stream, eom, NORM_FLUSH_PASSIVE);
+        NormSetWatermark(norm_session, norm_tx_stream, true);
+    }
+    else
+    {
+        NormStreamFlush(norm_tx_stream, eom, flushMode);
+    }
+   
+    if (0 != norm_stream_bytes_remain)
+    {
+        // The flush forces the runt segment out, so we increment our buffer
+        // usage count
+        norm_stream_buffer_count++;
+        norm_stream_bytes_remain = 0;
+        if (!norm_watermark_pending && (norm_stream_buffer_count >= (norm_stream_buffer_max >> 1)))
+        {
+            //TRACE("norm_engine_t::stream_flush() initiating watermark ACK request (buffer count:%lu max:%lu usage:%u)...\n",
+            //       norm_stream_buffer_count, norm_stream_buffer_max);
+            NormSetWatermark(norm_session, norm_tx_stream, true);
+            norm_ack_retry_count = norm_ack_retry_max;
+            norm_watermark_pending = true;
+        }
+    } 
+}  // end zmq::norm_engine_t::stream_flush()
+
+
 void zmq::norm_engine_t::in_event()
 {
     // This means a NormEvent is pending, so call NormGetNextEvent() and handle
     NormEvent event;
-    if (!NormGetNextEvent(norm_instance, &event))
+    if (NormGetNextEvent(norm_instance, &event, false))
     {
-        // NORM has died before we unplugged?!
-        zmq_assert(false);
-        return;
-    }
-    
-    switch(event.type)
-    {
+        switch(event.type)
+        {
         case NORM_TX_QUEUE_VACANCY:
         case NORM_TX_QUEUE_EMPTY:
             if (!norm_tx_ready)
@@ -350,7 +463,92 @@ void zmq::norm_engine_t::in_event()
                 send_data();
             }
             break;
-            
+
+        case NORM_TX_WATERMARK_COMPLETED:
+            if (NORM_ACK_SUCCESS == NormGetAckingStatus(norm_session))
+            {
+                if (norm_watermark_pending)
+                {
+                    // We were being flow controlled.  Everyone
+                    // acknowledged so we can move forward.
+                    norm_watermark_pending = false;
+                    norm_stream_buffer_count -= (norm_stream_buffer_max / 2);
+                    if (!norm_tx_ready)
+                    {
+                        norm_tx_ready = true;
+                        send_data();
+                    }
+                }
+            }
+            else if (norm_ack_retry_count > 0)
+            {
+                // Someone didn't acknowledge but we're configured to try again
+                // Reset the watermark acknowledgement request
+                NormResetWatermark(norm_session);
+                norm_ack_retry_count--;
+            }
+            else
+            {
+                // Find out who didn't acknowledge and kick them out
+                if (is_unicast)
+                {
+                    // (If this is a unicast session, then reset indefinitely?)
+                    NormResetWatermark(norm_session);
+                }
+                else
+                {
+                    // Assume the non-acking receiver(s) quit and remove from acking list
+                    NormAckingStatus ackingStatus;
+                    NormNodeId prevNodeId = NORM_NODE_NONE;
+                    NormNodeId nodeId = NORM_NODE_NONE; // init iteration
+                    while (NormGetNextAckingNode(norm_session, &nodeId, &ackingStatus))
+                    {
+                        if (NORM_ACK_SUCCESS != ackingStatus)
+                        {
+                            NormRemoveAckingNode(norm_session, nodeId);
+                            // prevent underlying iteration reset
+                            nodeId = prevNodeId;
+                        }
+                        else
+                        {
+                            // This keeps the underlying NORM iterator from  
+                            // resetting when an acking node is removed.
+                            NormNodeId tempId = nodeId;
+                            nodeId = prevNodeId;
+                            prevNodeId = tempId;
+                        }
+                    }
+                    if (norm_watermark_pending)
+                    {
+                        // We were being flow controlled. Move
+                        // forward for remaining receivers.
+                        norm_watermark_pending = false;
+                        norm_stream_buffer_count -= (norm_stream_buffer_max / 2);
+                        if (!norm_tx_ready)
+                        {
+                            norm_tx_ready = true;
+                            send_data();
+                        }
+                    }
+                }
+            }
+            break;
+
+        case NORM_REMOTE_SENDER_NEW:
+            if (is_twoway) {
+                NormNodeId remoteId = NormNodeGetId(event.sender);
+#ifdef ZMQ_DEBUG_NORM
+                bool worked =
+#endif
+                    NormAddAckingNode(norm_session, remoteId);
+#ifdef ZMQ_DEBUG_NORM
+                std::cout << "NormAddAckingNode(" << (unsigned)remoteId << ")"
+                          << (worked ? " WORKED" : " FAILED")
+                          << std::endl << std::flush;
+#endif
+            }
+            break;
+
         case NORM_RX_OBJECT_NEW:
             //break;
         case NORM_RX_OBJECT_UPDATED:
@@ -363,8 +561,8 @@ void zmq::norm_engine_t::in_event()
             if (NULL != rxState)
             {
                 // Remove the state from the list it's in
-                // This is now unnecessary since deletion takes care of list removal
-                // but in the interest of being clear ...
+                // This is now unnecessary since deletion takes care of
+                // list removal, but in the interest of being clear ...
                 NormRxStreamState::List* list = rxState->AccessList();
                 if (NULL != list) list->Remove(*rxState);
             }
@@ -386,6 +584,7 @@ void zmq::norm_engine_t::in_event()
         default:
             // We ignore some NORM events 
             break;
+        }  // end switch(event.type)
     }
 }  // zmq::norm_engine_t::in_event()
 
@@ -412,6 +611,9 @@ void zmq::norm_engine_t::recv_data(NormObjectHandle object)
         NormRxStreamState* rxState = (NormRxStreamState*)NormObjectGetUserData(object);
         if (NULL == rxState)
         {
+            if (is_twoway) {
+                
+            }
             // This is a new stream, so create rxState with zmq decoder, etc
             rxState = new NormRxStreamState(object, options.maxmsgsize);
             if (!rxState->Init())
@@ -435,8 +637,9 @@ void zmq::norm_engine_t::recv_data(NormObjectHandle object)
             rx_ready_list.Append(*rxState);
         }
     }
-    // This loop repeats until we've read all data available from "rx ready" inbound streams
-    // and pushed any accumulated messages we can up to the zmq session.
+    // This loop repeats until we've read all data available from "rx ready"
+    // inbound streams and pushed any accumulated messages we can up to the
+    // zmq session.
     while (!rx_ready_list.IsEmpty() || (zmq_input_ready && !msg_ready_list.IsEmpty()))
     {
         // Iterate through our rx_ready streams, reading data into the decoder
@@ -448,9 +651,10 @@ void zmq::norm_engine_t::recv_data(NormObjectHandle object)
             switch(rxState->Decode())
             {
                 case 1:  // msg completed   
-                    // Complete message decoded, move this stream to msg_ready_list
-                    // to push the message up to the session below.  Note the stream 
-                    // will be returned to the "rx_ready_list" after that's done
+                    // Complete message decoded, move this stream to
+                    // msg_ready_list to push the message up to the session
+                    // below.  Note the stream will be returned to the
+                    // "rx_ready_list" after that's done
                     rx_ready_list.Remove(*rxState);
                     msg_ready_list.Append(*rxState);
                     continue;
@@ -485,8 +689,8 @@ void zmq::norm_engine_t::recv_data(NormObjectHandle object)
                 }
                 if (0 == numBytes)
                 {
-                    // This probably shouldn't happen either since we found msg start
-                    // Need to wait for more data
+                    // This probably shouldn't happen either since we found
+                    // msg start. Need to wait for more data
                     break;
                 }
                 if (0 == syncFlag) rxState->SetSync(true);
@@ -502,8 +706,9 @@ void zmq::norm_engine_t::recv_data(NormObjectHandle object)
                 rx_pending_list.Append(*rxState);
                 continue;
             }
-            // Now we're actually ready to read data from the NORM stream to the zmq_decoder
-            // the underlying zmq_decoder->get_buffer() call sets how much is needed.
+            // Now we're actually ready to read data from the NORM stream to
+            // the zmq_decoder. The underlying zmq_decoder->get_buffer() call
+            // sets how much is needed.
             unsigned int numBytes = rxState->GetBytesNeeded();
             if (!NormStreamRead(stream, rxState->AccessBuffer(), &numBytes))
             {
@@ -527,10 +732,11 @@ void zmq::norm_engine_t::recv_data(NormObjectHandle object)
         
         if (zmq_input_ready)
         {
-            // At this point, we've made a pass through the "rx_ready" stream list
-            // Now make a pass through the "msg_pending" list (if the zmq session 
-            // ready for more input).  This may possibly return streams back to 
-            // the "rx ready" stream list after their pending message is handled
+            // At this point, we've made a pass through the "rx_ready" stream
+            // list. Now make a pass through the "msg_pending" list (if the
+            // zmq session is ready for more input).  This may possibly return
+            // streams back to the "rx ready" stream list after their pending
+            // message is handled
             NormRxStreamState::List::Iterator iterator(msg_ready_list);
             NormRxStreamState* rxState;
             while (NULL != (rxState = iterator.GetNextItem()))

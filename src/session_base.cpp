@@ -558,7 +558,19 @@ void zmq::session_base_t::start_connecting (bool wait_)
         //  At this point we'll create message pipes to the session straight
         //  away. There's no point in delaying it as no concept of 'connect'
         //  exists with NORM anyway.
-        if (options.type == ZMQ_PUB || options.type == ZMQ_XPUB) {
+        if (options.type == ZMQ_PAIR) {
+
+            //  NORM bi-directional.
+            norm_engine_t* norm_tranceiver =
+                new (std::nothrow) norm_engine_t (io_thread, options);
+            alloc_assert (norm_tranceiver);
+
+            int rc = norm_tranceiver->init (addr->address.c_str (), true, true);
+            errno_assert (rc == 0);
+
+            send_attach (this, norm_tranceiver);
+        }
+        else if (options.type == ZMQ_PUB || options.type == ZMQ_XPUB) {
 
             //  NORM sender.
             norm_engine_t* norm_sender = new (std::nothrow) norm_engine_t(io_thread, options);

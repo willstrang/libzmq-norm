@@ -2,8 +2,15 @@
 #ifndef __ZMQ_NORM_ENGINE_HPP_INCLUDED__
 #define __ZMQ_NORM_ENGINE_HPP_INCLUDED__
 
+#if !defined ZMQ_HAVE_NORM
+#warning "ZMQ_HAVE_NORM is NOT defined"
+#endif
+
 #if defined ZMQ_HAVE_NORM
 
+#define ZMQ_DEBUG_NORM
+
+#include "norm_address.hpp"
 #include "io_object.hpp"
 #include "i_engine.hpp"
 #include "options.hpp"
@@ -54,8 +61,9 @@ namespace zmq
         private:
             void unplug();
             void send_data();
-            void recv_data(NormObjectHandle stream);      
-                
+            unsigned int stream_write(const char* buffer, unsigned int numBytes);
+            void stream_flush(bool eom, NormFlushMode flushMode);
+            void recv_data(NormObjectHandle stream);    
                 
             enum {BUFFER_SIZE = 2048};
                    
@@ -157,8 +165,12 @@ namespace zmq
             NormInstanceHandle      norm_instance;
             handle_t                norm_descriptor_handle;
             NormSessionHandle       norm_session;
+            norm_address_t          norm_address;
+            bool                    is_unicast;
             bool                    is_sender;
             bool                    is_receiver;
+            bool                    is_twoway;
+            
             // Sender state
             msg_t                   tx_msg;
             v2_encoder_t            zmq_encoder;    // for tx messages (we use v2 for now)  
@@ -171,10 +183,22 @@ namespace zmq
             char                    tx_buffer[BUFFER_SIZE];
             unsigned int            tx_index;
             unsigned int            tx_len;
+            // These sender variables are used to manage ack-based stream flow control.
+            // (norm_acking needs to be set "true" and at least one node id added
+            //  via NormAddAckingNode() for this stuff to kick into action.)
+            // This makes the NORM sender flow controlled similar to a TCP socket.
+            bool                    norm_acking;
+            bool                    norm_watermark_pending;
+            UINT16                  norm_segment_size;
+            unsigned int            norm_stream_buffer_max;
+            unsigned int            norm_stream_buffer_count;
+            unsigned int            norm_stream_bytes_remain;
+            unsigned int            norm_ack_retry_max;
+            unsigned int            norm_ack_retry_count;
             
             // Receiver state
-            // Lists of norm rx streams from remote senders
             bool                    zmq_input_ready; // zmq ready to receive msg(s)
+            // Lists of norm rx streams from remote senders
             NormRxStreamState::List rx_pending_list; // rx streams waiting for data reception
             NormRxStreamState::List rx_ready_list;   // rx streams ready for NormStreamRead()
             NormRxStreamState::List msg_ready_list;  // rx streams w/ msg ready for push to zmq

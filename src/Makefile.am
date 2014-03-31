@@ -45,6 +45,7 @@ libzmq_la_SOURCES = \
     msg.hpp \
     mtrie.hpp \
     mutex.hpp \
+    norm_address.hpp \
     norm_engine.hpp \
     null_mechanism.hpp \
     object.hpp \
@@ -113,6 +114,7 @@ libzmq_la_SOURCES = \
     mechanism.cpp \
     msg.cpp \
     mtrie.cpp \
+    norm_address.cpp \
     norm_engine.cpp \
     null_mechanism.cpp \
     object.cpp \

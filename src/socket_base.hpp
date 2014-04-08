@@ -120,6 +120,8 @@ namespace zmq
         void event_closed (std::string &addr_, int fd_);        
         void event_close_failed (std::string &addr_, int fd_);  
         void event_disconnected (std::string &addr_, int fd_); 
+        void event_connected_identity (std::string &identity_, int fd_);
+        void event_disconnected_identity (std::string &identity_, int fd_);
 
     protected:
 
@@ -159,8 +161,9 @@ namespace zmq
         //  Delay actual destruction of the socket.
         void process_destroy ();
 
-        // Socket event data dispath
-        void monitor_event (zmq_event_t data_, const std::string& addr_);
+        // Socket event data dispatch
+        void monitor_event (zmq_event_t data_,
+                            const std::string& addr_);
 
         // Monitor socket cleanup
         void stop_monitor ();

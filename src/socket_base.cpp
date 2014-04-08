@@ -57,6 +57,8 @@
 #ifdef ZMQ_HAVE_OPENPGM
 #include "pgm_socket.hpp"
 #endif
+#include "norm_address.hpp"
+#include "norm_listener.hpp"
 
 #include "pair.hpp"
 #include "pub.hpp"
@@ -378,13 +380,15 @@ int zmq::socket_base_t::bind (const char *addr_)
         return rc;
     }
 
-    if (protocol == "pgm" || protocol == "epgm" || protocol == "norm") {
+    if (protocol == "pgm" || protocol == "epgm" ||
+        (protocol == "norm" && (options.type == ZMQ_PUB ||
+                                options.type == ZMQ_SUB))) {
         //  For convenience's sake, bind can be used interchageable with
-        //  connect for PGM, EPGM and NORM transports.
+        //  connect for PGM, EPGM, and NORM multicast transports.
         return connect (addr_);
     }
 
-    //  Remaining trasnports require to be run in an I/O thread, so at this
+    //  Remaining transports require to be run in an I/O thread, so at this
     //  point we'll choose one.
     io_thread_t *io_thread = choose_io_thread (options.affinity);
     if (!io_thread) {
@@ -432,6 +436,25 @@ int zmq::socket_base_t::bind (const char *addr_)
 #if defined ZMQ_HAVE_TIPC
     if (protocol == "tipc") {
          tipc_listener_t *listener = new (std::nothrow) tipc_listener_t (
+              io_thread, this, options);
+         alloc_assert (listener);
+         int rc = listener->set_address (address.c_str ());
+         if (rc != 0) {
+             delete listener;
+             event_bind_failed (address, zmq_errno());
+             return -1;
+         }
+
+        // Save last endpoint URI
+        listener->get_address (last_endpoint);
+
+        add_endpoint (addr_, (own_t *) listener, NULL);
+        return 0;
+    }
+#endif
+#if defined ZMQ_HAVE_NORM
+    if (protocol == "norm") {
+         norm_listener_t *listener = new (std::nothrow) norm_listener_t (
               io_thread, this, options);
          alloc_assert (listener);
          int rc = listener->set_address (address.c_str ());
@@ -616,9 +639,7 @@ int zmq::socket_base_t::connect (const char *addr_)
         }
     }
 #endif
-    
-// TBD - Should we check address for ZMQ_HAVE_NORM???
-    
+
 #ifdef ZMQ_HAVE_OPENPGM
     if (protocol == "pgm" || protocol == "epgm") {
         struct pgm_addrinfo_t *res = NULL;
@@ -640,6 +661,17 @@ int zmq::socket_base_t::connect (const char *addr_)
             delete paddr;
             return -1;
         }
+    }
+#endif
+#if defined ZMQ_HAVE_NORM
+    else
+    if (protocol == "norm") {
+        // make sure norm address is valid & resolves, but don't save resolved
+        // norm being UDP based, there's no point in delaying resolution check
+        norm_address_t norm_address;
+        int rc = norm_address.resolve (address.c_str(), false, options.ipv6);
+        if (rc != 0)
+             return -1;
     }
 #endif
 
@@ -1336,7 +1368,30 @@ void zmq::socket_base_t::event_disconnected (std::string &addr_, int fd_)
     }
 }
 
-void zmq::socket_base_t::monitor_event (zmq_event_t event_, const std::string& addr_)
+void zmq::socket_base_t::event_connected_identity (std::string &identity_,
+                                                   int fd_)
+{
+    if (monitor_events & ZMQ_EVENT_CONNECTED_IDENTITY) {
+        zmq_event_t event;
+        event.event = ZMQ_EVENT_CONNECTED_IDENTITY;
+        event.value = fd_;
+        monitor_event (event, identity_);
+    }
+}
+
+void zmq::socket_base_t::event_disconnected_identity (std::string &identity_,
+                                                      int fd_)
+{
+    if (monitor_events & ZMQ_EVENT_DISCONNECTED_IDENTITY) {
+        zmq_event_t event;
+        event.event = ZMQ_EVENT_DISCONNECTED_IDENTITY;
+        event.value = fd_;
+        monitor_event (event, identity_);
+    }
+}
+
+void zmq::socket_base_t::monitor_event (zmq_event_t event_,
+                                        const std::string& addr_)
 {
     if (monitor_socket) {
         const uint16_t eid = (uint16_t)event_.event;
@@ -1350,11 +1405,10 @@ void zmq::socket_base_t::monitor_event (zmq_event_t event_, const std::string& a
         memcpy (data1+sizeof(eid), &value, sizeof(value));
         zmq_sendmsg (monitor_socket, &msg, ZMQ_SNDMORE);
         // prepare and send second message frame
-        // containing the address (endpoint)
+        // containing the address (endpoint or identity)
         zmq_msg_init_size (&msg, addr_.size());
         memcpy(zmq_msg_data(&msg), addr_.c_str(), addr_.size());
         zmq_sendmsg (monitor_socket, &msg, 0);
-        zmq_msg_close (&msg);
     }
 }
 

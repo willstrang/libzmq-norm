@@ -29,9 +29,74 @@ zmq::norm_engine_t::norm_engine_t(io_thread_t*     parent_,
     errno_assert(0 == rc);
 }
 
-zmq::norm_engine_t::~norm_engine_t()
+zmq::norm_engine_t::~norm_engine_t ()
 {
     shutdown();  // in case it was not already called
+}
+
+// this API used by norm_listener to start engine for incoming unicast session
+int zmq::norm_engine_t::init (NormInstanceHandle norm_instance_,
+                              NormSessionHandle norm_session_,
+                              NormNodeHandle normNodeHandle_,
+                              norm_address_t &client_address_,
+                              norm_address_t &listen_address_)
+{
+    // listener calls this API meaning a 2-way messaging model vs 1-way pub/sub
+    is_twoway = true;
+    is_unicast = true;
+    is_receiver = true;
+    is_sender = true;
+
+    norm_address = client_address_;
+    // our_norm_address = listen_norm_address_;
+
+    norm_instance = norm_instance_;
+    norm_session = norm_session_;
+
+    NormSetDefaultSyncPolicy(norm_session, NORM_SYNC_CURRENT);
+
+    NormSetCongestionControl(norm_session, true);  // ??
+
+    UINT16 normSegmentSize = 1400;  // NORM_DATA payload size
+    UINT16 normNumData = 16;   // FEC block size (user data packets per block)
+    // Number of FEC parity packets _computed_ per block
+    UINT32 normStreamBufferSize = (is_twoway ? 2*1024*1024 : 256*1024);
+    if (options.sndbuf != 0)
+        normStreamBufferSize = (is_twoway ? 2 * options.sndbuf : options.sndbuf);
+
+    norm_tx_ready = true;
+    norm_tx_stream = NormStreamOpen(norm_session, normStreamBufferSize);
+
+    // Init variables related to ack-based flow control
+    // (norm_acking MUST be set "true" for this to be used)
+    norm_acking = true;
+    norm_segment_size = normSegmentSize;
+    norm_stream_buffer_max = NormGetStreamBufferSegmentCount
+        (normStreamBufferSize, normSegmentSize, normNumData);
+    // a little safety margin (perhaps not necessary)
+    norm_stream_buffer_max -= normNumData;
+    norm_stream_buffer_count = 0;
+    norm_stream_bytes_remain = 0;
+    norm_watermark_pending = false;
+
+
+#if defined ZMQ_DEBUG_NORM
+    NormSetMessageTrace(norm_session, true);
+    NormSetDebugLevel(3);
+    char logfilename[48];
+    sprintf(logfilename, "normLog_%u_%u.txt",
+            (unsigned) listen_address_.getNormNodeId (),
+            (unsigned) client_address_.getNormNodeId ());
+    bool worked = NormOpenDebugLog(norm_instance, logfilename);
+    std::string clientStr, serverStr;
+    client_address_.to_string_raw (clientStr);
+    listen_address_.to_string_raw (serverStr);
+    std::cout << "debug log " << logfilename << " for connection from client "
+              << clientStr << " to server " << serverStr
+              << (worked ? "" : " FAILED") << std::endl << std::flush;
+#endif
+
+    return 0;
 }
 
 
@@ -49,10 +114,12 @@ int zmq::norm_engine_t::init(const char* network_, bool send, bool recv)
         return -1;
     }
     
-    // Require unicast address for 2-way connection
-    if (is_twoway && !NormIsUnicastAddress (norm_address.getHostName ())) {
-        errno = EINVAL;
-        return -1;
+    if (is_twoway) {
+        // Require unicast address for 2-way connection
+        if (!NormIsUnicastAddress (norm_address.getRawHostName ())) {
+            errno = EINVAL;
+            return -1;
+        }
     }
     
     if (NORM_INSTANCE_INVALID == norm_instance)
@@ -70,25 +137,24 @@ int zmq::norm_engine_t::init(const char* network_, bool send, bool recv)
     //       b) Add function to use iface addr
     //       c) Randomize and implement a NORM session layer
     //          conflict detection/resolution protocol
-    
-    norm_session = NormCreateSession(norm_instance,
-                                     norm_address.getHostName (),
-                                     norm_address.getPortNumber (),
+
+    const char *hostname = (is_twoway ? "127.0.0.1" :
+                            norm_address.getRawHostName ());
+    UINT16 port = (is_twoway ? 0 : norm_address.getPortNumber ());
+    norm_session = NormCreateSession(norm_instance, hostname, port,
                                      norm_address.getNormNodeId ());
     if (NORM_SESSION_INVALID == norm_session)
     {
         int savedErrno = errno;
-        NormDestroyInstance(norm_instance);
-        norm_instance = NORM_INSTANCE_INVALID;
+        shutdown();
         errno = savedErrno;
         return -1;
     }
 
     // There's many other useful NORM options that could be applied here
-    if (NormIsUnicastAddress(norm_address.getHostName ()))
+    if (NormIsUnicastAddress(norm_address.getRawHostName ()))
     {
         is_unicast = true;
-        norm_acking = true;
         NormSetDefaultUnicastNack(norm_session, true);
     }
     else
@@ -115,52 +181,77 @@ int zmq::norm_engine_t::init(const char* network_, bool send, bool recv)
         }
     }
 
+    UINT16 normSegmentSize = 1400;  // NORM_DATA payload size
+    UINT16 normNumData = 16;   // FEC block size (user data packets per block)
+    // Number of FEC parity packets _computed_ per block
+    UINT16 normNumParity = 4;
+    UINT32 normRxBufferSize = (is_twoway ? 2*1024*1024 : 128*1024);
+    if (options.rcvbuf != 0) normRxBufferSize = options.rcvbuf;
+    UINT32 normTxBufferSize = (is_twoway ? 2*1024*1024 : 128*1024);
+    if (options.sndbuf != 0) normTxBufferSize = options.sndbuf;
+    UINT32 normStreamBufferSize = (is_twoway ? 2*1024*1024 : 256*1024);
+    if (options.sndbuf != 0)
+        normStreamBufferSize = (is_twoway ? 2 * options.sndbuf : options.sndbuf);
+
+    if (is_twoway) {
+        // To get here, this unicast socket must be connecting, not binding
+
+        // Here is how we connect with an ephemeral port, rather than needing
+        // to use the well-known port connecte to as is norm's default behavior
+        // 1) create a session that will be assigned an ephemeral port when
+        //    NormStartReceiver() (or sender) is called
+        // 2) start receiver and a single tx/rx socket, with the ephemeral
+        //    (system assigned) local port binding being opened
+        // 3) after socket binding is made, change the session destination to
+        //    the server port/addr, while keeping ephemeral local binding
+        // 4) start sending NORM_CMD(CC) to server, and server will detect a
+        //    "new remote sender" with our address and ephemeral local port
+
+        // NORM_SYNC_CURRENT provides "instant" receiver sync to the senders
+        // _current_ message transmission, which might be the most appropriate
+        // behavior for 2-way unicast messaging patterns
+        NormSetDefaultSyncPolicy(norm_session, NORM_SYNC_CURRENT);
+    }
+    else {
+        // For one-way possibly-multicast pub/sub pattern, NORM_SYNC_STREAM
+        // tries for everything the sender has cached/buffered
+        NormSetDefaultSyncPolicy(norm_session, NORM_SYNC_STREAM);
+    }
+    
     if (recv)
     {
-        // For 2-way patterns, NORM_SYNC_CURRENT provides "instant" receiver
-        // sync to the sender's _current_ message transmission. For pub/sub,
-        // NORM_SYNC_STREAM tries for everything the sender has cached/buffered
-        NormSetDefaultSyncPolicy(norm_session, (is_twoway ? NORM_SYNC_CURRENT
-                                                : NORM_SYNC_STREAM));
-        unsigned long rcvbuf = (is_twoway && options.rcvbuf != 0 ?
-                                options.rcvbuf : 2*1024*1024);
-        if (!NormStartReceiver(norm_session, rcvbuf))
+        if (!NormStartReceiver(norm_session, normRxBufferSize))
         {
-            // errno set by whatever failed
-            int savedErrno = errno;
-            NormDestroyInstance(norm_instance); // session gets closed, too
-            norm_session = NORM_SESSION_INVALID;
-            norm_instance = NORM_INSTANCE_INVALID;
+            int savedErrno = errno;   // errno was set by whatever failed
+            shutdown();
             errno = savedErrno;
             return -1;
         }
         is_receiver = true;
     }
-    
+
     if (send)
     {
-        UINT16 normSegmentSize = 1400;  // NORM_DATA payload size
-        // FEC block size (user data packets per block)
-        UINT16 normNumData = 16;
-        // Number of FEC parity packets _computed_ per block
-        UINT16 normNumParity = 4;
-        unsigned int normTxBufferSize = 2*1024*1024;
-        unsigned int normStreamBufferSize = 2*1024*1024;
-        
-        
+        if (is_twoway) {
+            // change the session destination to the server address/port
+            bool worked = NormChangeDestination(norm_session,
+                                                norm_address.getRawHostName (),
+                                                norm_address.getPortNumber ());
+            if (!worked) {
+                shutdown();
+                errno = EREMOTE;  // dunno - pick some distinctive errno?
+                return -1;
+            }
+        }
+
         // Pick a random sender instance id (aka norm sender session id)
         NormSessionId session_id = NormGetRandomSessionId();
         // TBD - provide "options" for some NORM sender parameters
-        unsigned long sndbuf = (is_twoway && options.sndbuf != 0 ?
-                                options.sndbuf : normTxBufferSize);
-        if (!NormStartSender(norm_session, session_id, sndbuf, 
+        if (!NormStartSender(norm_session, session_id, normTxBufferSize, 
                              normSegmentSize, normNumData, normNumParity))
         {
-            // errno set by whatever failed
-            int savedErrno = errno;
-            NormDestroyInstance(norm_instance); // session gets closed, too
-            norm_session = NORM_SESSION_INVALID;
-            norm_instance = NORM_INSTANCE_INVALID;
+            int savedErrno = errno;   // errno was set by whatever failed
+            shutdown();
             errno = savedErrno;
             return -1;
         }    
@@ -170,39 +261,38 @@ int zmq::norm_engine_t::init(const char* network_, bool send, bool recv)
         norm_tx_stream = NormStreamOpen(norm_session, normStreamBufferSize);
         if (NORM_OBJECT_INVALID == norm_tx_stream)
         {
-            // errno set by whatever failed
-            int savedErrno = errno;
-            NormDestroyInstance(norm_instance); // session gets closed, too
-            norm_session = NORM_SESSION_INVALID;
-            norm_instance = NORM_INSTANCE_INVALID;
+            int savedErrno = errno;   // errno was set by whatever failed
+            shutdown();
             errno = savedErrno;
             return -1;
         }
-        
-        // Init variables related to ack-based flow control
-        // (norm_acking MUST be set "true" for this to be used)
-        norm_segment_size = normSegmentSize;
-        norm_stream_buffer_max = NormGetStreamBufferSegmentCount(normStreamBufferSize, normSegmentSize, normNumData);
-        // a little safety margin (perhaps not necessary)
-        norm_stream_buffer_max -= normNumData;
-        norm_stream_buffer_count = 0;
-        norm_stream_bytes_remain = 0;
-        norm_watermark_pending = false;
+
+        if (is_twoway) {
+            // Init variables related to ack-based flow control
+            // (norm_acking MUST be set "true" for this to be used)
+            norm_acking = true;
+            norm_segment_size = normSegmentSize;
+            norm_stream_buffer_max = NormGetStreamBufferSegmentCount
+                (normStreamBufferSize, normSegmentSize, normNumData);
+            // a little safety margin (perhaps not necessary)
+            norm_stream_buffer_max -= normNumData;
+            norm_stream_buffer_count = 0;
+            norm_stream_bytes_remain = 0;
+            norm_watermark_pending = false;
+        }
     }
     
-    if (is_twoway) {
-        // For 2-way models, push the norm "robustness factor" above default 20
-        NormSetTxRobustFactor(norm_session, 100);
-        NormSetDefaultRxRobustFactor(norm_session, 100);
-    }
-
 #if defined ZMQ_DEBUG_NORM
     NormSetMessageTrace(norm_session, true);
     NormSetDebugLevel(3);
     char logfilename[32];
     sprintf(logfilename, "normLog_%u.txt",
             (unsigned) norm_address.getNormNodeId ());
-    NormOpenDebugLog(norm_instance, logfilename);
+    bool worked = NormOpenDebugLog(norm_instance, logfilename);
+    std::string clientStr;
+    norm_address.to_string_raw (clientStr);
+    std::cout << "debug log " << logfilename << " to connect on " << clientStr
+              << (worked ? "" : " FAILED") << std::endl << std::flush;
 #endif
     
     return 0;  // no error
@@ -213,29 +303,29 @@ void zmq::norm_engine_t::shutdown()
     // TBD - implement a more graceful shutdown option
     if (is_receiver)
     {
-        NormStopReceiver(norm_session);
+        NormStopReceiver (norm_session);
         
         // delete any active NormRxStreamState
-        rx_pending_list.Destroy();
-        rx_ready_list.Destroy();
-        msg_ready_list.Destroy();
+        rx_pending_list.Destroy ();
+        rx_ready_list.Destroy ();
+        msg_ready_list.Destroy ();
         
         is_receiver = false;
     }
     if (is_sender)
     {
-        NormStopSender(norm_session);
+        NormStopSender (norm_session);
         is_sender = false;
     }
     if (NORM_SESSION_INVALID != norm_session)
     {
-        NormDestroySession(norm_session);
+        NormDestroySession (norm_session);
         norm_session = NORM_SESSION_INVALID;
     }
     if (NORM_INSTANCE_INVALID != norm_instance)
     {
-        NormStopInstance(norm_instance);
-        NormDestroyInstance(norm_instance);
+        NormStopInstance (norm_instance);
+        NormDestroyInstance (norm_instance);
         norm_instance = NORM_INSTANCE_INVALID;
     }
 }  // end zmq::norm_engine_t::shutdown()
@@ -449,7 +539,7 @@ void zmq::norm_engine_t::in_event()
     // This means a NormEvent is probably pending, 
     // so call NormGetNextEvent() and handle 
     NormEvent event;
-    if (NormGetNextEvent(norm_instance, &event, false))
+    while (NormGetNextEvent(norm_instance, &event, false))
     {
         switch(event.type)
         {
@@ -533,7 +623,6 @@ void zmq::norm_engine_t::in_event()
                 break;
 
             case NORM_RX_OBJECT_NEW:
-                //break;
             case NORM_RX_OBJECT_UPDATED:
                 recv_data(event.object);
                 break;

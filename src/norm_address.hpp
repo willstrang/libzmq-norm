@@ -20,6 +20,10 @@
 #ifndef __ZMQ_NORM_ADDRESS_HPP_INCLUDED__
 #define __ZMQ_NORM_ADDRESS_HPP_INCLUDED__
 
+#if defined ZMQ_HAVE_NORM
+
+// #define ZMQ_DEBUG_NORM
+
 #include "platform.hpp"
 #include <string> // tcp_address.hpp needs this
 #include "tcp_address.hpp"
@@ -55,13 +59,36 @@ namespace zmq
         //  The opposite to resolve ()
         virtual int to_string (std::string &addr_);
 
+        //  Does like to_string (), but uses the raw hostname/IP address,
+        //  so this should return exactly the values passed into resolve ().
+        //  Using the 4 set* APIs here, you can even compose norm addresses
+        //  and get them out with to_string_raw (), without resolving them.
+        int to_string_raw (std::string &addr_);
+
         NormNodeId getNormNodeId () const { return localId; }
+        void setNormNodeId (NormNodeId normNodeId_);
         bool isNormNodeId () const;
+
         const char *getIfaceName () const { return ifaceName; }
+        int setIfaceName (const char *ifaceName_);
         bool isIfaceName () const { return (ifaceName[0] != '\0'); }
+
+        // returns true if valid address was returned, else false
+        bool getTCPAddress(void *dst,
+                           socklen_t &dst_len,
+                           sa_family_t &family);
+        // returns true if valid address was set, else false
+        bool setTCPAddress(const void *src,
+                           socklen_t src_len,
+                           sa_family_t family);
+
         uint16_t getPortNumber () const;
-        const char *getHostName () const { return hostName; }
-        bool isHostName () const { return (hostName[0] != '\0'); }
+        void setPortNumber (uint16_t port_);
+
+        // Get raw hostname/IP address last passed into resolve ()
+        const char *getRawHostName () const { return hostName; }
+        int setRawHostName (const char *hostName_);
+        bool isRawHostName () const { return (hostName[0] != '\0'); }
 
     protected:
 
@@ -74,5 +101,7 @@ namespace zmq
     };
 
 }
+
+#endif
 
 #endif

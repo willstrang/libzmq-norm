@@ -172,7 +172,8 @@ void zmq::norm_listener_t::in_event ()
                 // race condition as mentioned above)
                 NormSessionHandle client_session =
                     NormCreateSession (client_instance, "127.0.0.1",
-                                       client_address.getPortNumber (), 1);
+                                       listen_address.getPortNumber (),
+                                       listen_address.getNormNodeId ());
                 if (NORM_SESSION_INVALID == client_session) {
                     // errno set by whatever caused NormCreateInstance to fail
                     socket->event_accept_failed (endpoint, errno);

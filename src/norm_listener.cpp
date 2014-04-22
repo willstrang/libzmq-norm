@@ -35,6 +35,7 @@
 #include "ip.hpp"
 #include "tcp.hpp"
 #include "socket_base.hpp"
+#include "address.hpp"
 
 #ifdef ZMQ_HAVE_WINDOWS
 #include "windows.hpp"
@@ -98,6 +99,8 @@ void zmq::norm_listener_t::process_plug ()
     handle = add_fd(s);
     // Set POLLIN for notification of pending NormEvents
     set_pollin (handle);
+
+    socket->event_listening (endpoint, s);
 }
 
 void zmq::norm_listener_t::process_term (int linger_)
@@ -122,29 +125,37 @@ void zmq::norm_listener_t::in_event ()
     NormEvent event;
     while (NormGetNextEvent(listen_instance, &event, false)) {
 
+#ifdef ZMQ_DEBUG_NORM_2
+            if (event.type < NORM_GRTT_UPDATED &&
+                event.type != NORM_TX_RATE_CHANGED) {
+
+                char clientAddr[64];
+                UINT16 clientPort;
+                norm_address_t::getEventAddr(event, clientAddr, clientPort);
+
+                std::cout << "listen event: " << event.type
+                          << " from " << clientAddr << ":" << clientPort
+                          << " ID " << NormNodeGetId (event.sender)
+                          << std::endl << std::flush;
+            }
+#endif
         switch(event.type) {
 
-#ifdef NORM_REMOTE_SENDER_RESET
+            // #ifdef NORM_REMOTE_SENDER_RESET
         case NORM_REMOTE_SENDER_RESET:
-#endif
+            // #endif
         case NORM_REMOTE_SENDER_NEW:
         {
             norm_address_t client_address;
             char IPaddr[16]; // big enough for IPv6
             unsigned int addrLen = sizeof (IPaddr);
             UINT16 clientPort;
-            bool worked;
             NormNodeGetAddress(event.sender, IPaddr, &addrLen, &clientPort);
-            int addrFamily;
-            if (4 == addrLen)
-                addrFamily = AF_INET;
-            else
-                addrFamily = AF_INET6;
+            int addrFamily= (4 == addrLen ? AF_INET : AF_INET6);
             char clientAddr[64];
             clientAddr[63] = '\0';
             inet_ntop(addrFamily, IPaddr, clientAddr, 63);
-            worked = client_address.setTCPAddress(IPaddr, addrLen, addrFamily);
-            if (!worked) {
+            if (!client_address.setTCPAddress(IPaddr, addrLen, addrFamily)) {
                 socket->event_accept_failed (endpoint, errno);
                 return;
             }
@@ -167,7 +178,7 @@ void zmq::norm_listener_t::in_event ()
                     return;
                 }
 
-                // TBD - should confirm we don't already have session for
+                /// TBD - should confirm we don't already have session for
                 // given clientAddr/clientPort (could happen in case of a
                 // race condition as mentioned above)
                 NormSessionHandle client_session =
@@ -198,25 +209,28 @@ void zmq::norm_listener_t::in_event ()
                 // sender if deleted now, so we wait for
                 // NORM_REMOTE_SENDER_INACTIVE to delete
                 NormChangeDestination (client_session, clientAddr, clientPort);
-                NormStartSender (client_session, session_id++,
+                NormStartSender (client_session, ++session_id,
                                  normTxBufferSize, 1400, 16, 4);
 #ifdef ZMQ_DEBUG_NORM
                 std::cout << "server connection from client " << clientAddr
-                          << ":" << clientPort << std::endl << std::flush;
+                          << ":" << clientPort
+                          << " ID " << listen_address.getNormNodeId ()
+                          << " session_id " << session_id
+                          << std::endl << std::flush;
 #endif
 
                 fd_t fd = NormGetDescriptor(client_instance);
                 // remember our fd for ZMQ_SRCFD in messages
                 socket->set_fd(fd);
 
-                //  Choose I/O thread to run engine in.
-                io_thread_t *io_thread = choose_io_thread (options.affinity);
-                zmq_assert (io_thread);
-
                 //  Create the engine object for this connection.
                 norm_engine_t *engine = new (std::nothrow)
-                    norm_engine_t (io_thread, options);
+                    norm_engine_t (socket, options,
+                                   client_instance, client_session,
+                                   event.sender, client_address,
+                                   listen_address);
                 alloc_assert (engine);
+#ifdef UNUSED
                 int rc = engine->init (client_instance, client_session,
                                        event.sender, client_address,
                                        listen_address);
@@ -227,23 +241,33 @@ void zmq::norm_listener_t::in_event ()
                     NormDestroyInstance (client_instance);
                     return;
                 }
+#endif
 
-                //  Create and launch a session object.
-                session_base_t *session =
-                    session_base_t::create (io_thread, false, socket,
-                                            options, NULL);
+                //  Choose I/O thread to run engine in.
+                io_thread_t *io_thread = choose_io_thread (options.affinity);
+                zmq_assert (io_thread);
+
+                //  Create and launch session object, giving it client address.
+                std::string address_str, protocol ("norm");
+                client_address.to_string (address_str);
+                address_t *paddr = new (std::nothrow) address_t (protocol,
+                                                                 address_str);
+                session_base_t *session = session_base_t::create
+                    (io_thread, false, socket, options, paddr);
                 errno_assert (session);
                 session->inc_seqnum ();
                 launch_child (session);
                 send_attach (session, engine, false);
-                socket->event_accepted (endpoint, fd);
+                /// socket->event_accepted (endpoint, fd);
             }
-#ifdef NORM_REMOTE_SENDER_RESET
+            // #ifdef NORM_REMOTE_SENDER_RESET
             else if (NORM_REMOTE_SENDER_RESET == event.type) {
+#ifdef ZMQ_DEBUG_NORM
                 std::cout << "server reconnected to client " << clientAddr
                           << ":" << clientPort << std::endl << std::flush;
-            }
 #endif
+            }
+            // #endif
             break;
         }
 
@@ -264,25 +288,43 @@ void zmq::norm_listener_t::in_event ()
         case NORM_RX_OBJECT_NEW:
         case NORM_RX_OBJECT_UPDATED:
 #ifdef ZMQ_DEBUG_NORM
+        {
             recv_data(event.object);
+            char clientAddr[64];
+            UINT16 clientPort;
+            norm_address_t::getEventAddr(event, clientAddr, clientPort);
+
             if (listen_session == event.session) {
                 std::cout
                     << (event.type == NORM_RX_OBJECT_NEW ? "new" : "updated")
-                    << " data on listen_session?!?!\n"
+                    << " data on listen_session from " << clientAddr << ":"
+                    << clientPort << " ID " << NormNodeGetId (event.sender)
                     << std::endl << std::flush;
             }
             else {
-                std::cout << "recv'd data from client ...\n"
+                std::cout << "recv'd data from client " << clientAddr << ":"
+                    << clientPort << " ID " << NormNodeGetId (event.sender)
                           << std::endl << std::flush;
             }
+        }
 #endif
             break;
 
         default:
             // We ignore all other NORM events 
-#ifdef ZMQ_DEBUG_NORM
-            std::cout << "listen unhandled event: " << event.type << " "
-                      << std::endl << std::flush;
+#if defined ZMQ_DEBUG_NORM && not defined ZMQ_DEBUG_NORM_2
+            if (event.type < NORM_GRTT_UPDATED &&
+                event.type != NORM_TX_RATE_CHANGED) {
+
+                char clientAddr[64];
+                UINT16 clientPort;
+                norm_address_t::getEventAddr(event, clientAddr, clientPort);
+
+                std::cout << "listen unhandled event: " << event.type
+                          << " from " << clientAddr << ":" << clientPort
+                          << " ID " << NormNodeGetId (event.sender)
+                          << std::endl << std::flush;
+            }
 #endif
             break;
         }  // end switch(event.type)
@@ -373,8 +415,10 @@ int zmq::norm_listener_t::set_address (const char *addr_)
         return -1;
     }
 
-    // If addr_ didn't specify a nodeId, then get what NormCreateSession chose
-    listen_address.setNormNodeId (NormGetLocalNodeId (listen_session));
+    // In case addr_ didn't specify a nodeId, get what NormCreateSession used
+    if (listen_address.getNormNodeId () == NORM_NODE_ANY) {
+        listen_address.setNormNodeId (NormGetLocalNodeId (listen_session));
+    }
 
     //  Allow reusing the port.
     NormSetRxPortReuse(listen_session, true);  
@@ -393,12 +437,12 @@ int zmq::norm_listener_t::set_address (const char *addr_)
     s = NormGetDescriptor(listen_instance);
 
 #if defined ZMQ_DEBUG_NORM
-    NormSetMessageTrace(listen_session, true);
-    NormSetDebugLevel(3);
     char logfilename[32];
     sprintf(logfilename, "normLog_%u.txt",
             (unsigned) listen_address.getNormNodeId ());
-   bool worked =  NormOpenDebugLog(listen_instance, logfilename);
+    bool worked =  NormOpenDebugLog(listen_instance, logfilename);
+    NormSetMessageTrace(listen_session, true);
+    NormSetDebugLevel(3);
     std::string serverStr;
     listen_address.to_string_raw (serverStr);
     std::cout << "debug log " << logfilename << " to listen on "
@@ -416,8 +460,6 @@ int zmq::norm_listener_t::set_address (const char *addr_)
     session_id = NormGetRandomSessionId();
 
     listen_address.to_string (endpoint);
-
-    socket->event_listening (endpoint, s);
     return 0;
 }
 

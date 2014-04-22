@@ -233,21 +233,13 @@ int zmq::socket_base_t::check_protocol (const std::string &protocol_)
     //  Check whether socket type and transport protocol match.
     //  Specifically, multicast protocols can't be combined with
     //  bi-directional messaging patterns (socket types).
-    //if ((protocol_ == "pgm" || protocol_ == "epgm" || protocol_ == "norm") &&
     if ((protocol_ == "pgm" || protocol_ == "epgm") &&
           options.type != ZMQ_PUB && options.type != ZMQ_SUB &&
           options.type != ZMQ_XPUB && options.type != ZMQ_XSUB) {
         errno = ENOCOMPATPROTO;
         return -1;
     }
-    // NORM supports both multicast and bi-directional (only ZMQ_PAIR so far)
-    if ((protocol_ == "norm") &&
-        (options.type != ZMQ_PAIR && // options.type != ZMQ_ROUTER && 
-         options.type != ZMQ_PUB && options.type != ZMQ_SUB &&
-         options.type != ZMQ_XPUB && options.type != ZMQ_XSUB)) {
-        errno = ENOCOMPATPROTO;
-        return -1;
-    }
+    // NORM supports both multicast and bi-directional now
 
     //  Protocol is available.
     return 0;
@@ -555,7 +547,8 @@ int zmq::socket_base_t::connect (const char *addr_)
             new_pipes [0]->flush ();
 
             endpoint_t endpoint = {this, options};
-            pending_connection_t pending_connection = {endpoint, new_pipes [0], new_pipes [1]};
+            pending_connection_t pending_connection = {endpoint, new_pipes [0],
+                                                       new_pipes [1]};
             pend_connection (addr_, pending_connection);
         }
         else
@@ -578,16 +571,17 @@ int zmq::socket_base_t::connect (const char *addr_)
                 msg_t id;
                 rc = id.init_size (peer.options.identity_size);
                 errno_assert (rc == 0);
-                memcpy (id.data (), peer.options.identity, peer.options.identity_size);
+                memcpy (id.data (), peer.options.identity,
+                        peer.options.identity_size);
                 id.set_flags (msg_t::identity);
                 bool written = new_pipes [1]->write (&id);
                 zmq_assert (written);
                 new_pipes [1]->flush ();
             }
 
-            //  Attach remote end of the pipe to the peer socket. Note that peer's
-            //  seqnum was incremented in find_endpoint function. We don't need it
-            //  increased here.
+            //  Attach remote end of the pipe to the peer socket. Note that
+            //  peer's seqnum was incremented in find_endpoint function.
+            //  So we don't need it increased here.
             send_bind (peer.socket, new_pipes [1], false);
         }
 
@@ -595,7 +589,8 @@ int zmq::socket_base_t::connect (const char *addr_)
         last_endpoint.assign (addr_);
 
         // remember inproc connections for disconnect
-        inprocs.insert (inprocs_t::value_type (std::string (addr_), new_pipes[0]));
+        inprocs.insert (inprocs_t::value_type (std::string (addr_),
+                                               new_pipes[0]));
 
         return 0;
     }
@@ -681,8 +676,13 @@ int zmq::socket_base_t::connect (const char *addr_)
     errno_assert (session);
 
     //  PGM does not support subscription forwarding; ask for all data to be
-    //  sent to this pipe. (same for NORM, currently?)
-    bool subscribe_to_all = protocol == "pgm" || protocol == "epgm" || protocol == "norm";
+    //  sent to this pipe. (same for NORM pub/sub, currently)
+    bool subscribe_to_all = protocol == "pgm" || protocol == "epgm" ||
+        (protocol == "norm" && (options.type == ZMQ_XPUB ||
+                                options.type == ZMQ_XSUB ||
+                                options.type == ZMQ_PUB ||
+                                options.type == ZMQ_SUB));
+    /// TODO: should norm support ZMQ_PUSH and ZMQ_PULL over multicast?
     pipe_t *newpipe = NULL;
 
     if (options.immediate != 1 || subscribe_to_all) {

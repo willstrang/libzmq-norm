@@ -278,6 +278,8 @@ void zmq::session_base_t::process_plug ()
 {
     if (active)
         start_connecting (false);
+    //poller->set_pollin (socket->mailbox_handle); // TODO get sockets handle??
+    // socket->get_mailbox->signaler ??
 }
 
 int zmq::session_base_t::zap_connect ()
@@ -358,6 +360,9 @@ void zmq::session_base_t::process_attach (i_engine *engine_)
         //  Ask socket to plug into the remote end of the pipe.
         send_bind (socket, pipes [1]);
     }
+
+    if (addr && addr->protocol == "norm")
+        pipe->check_read ();
 
     //  Plug in the engine.
     zmq_assert (!engine);
@@ -477,14 +482,14 @@ void zmq::session_base_t::start_connecting (bool wait_)
 
     //  Choose I/O thread to run connecter in. Given that we are already
     //  running in an I/O thread, there must be at least one available.
-    io_thread_t *io_thread = choose_io_thread (options.affinity);
-    zmq_assert (io_thread);
+    io_thread_t *connect_io_thread = choose_io_thread (options.affinity);
+    zmq_assert (connect_io_thread);
 
     //  Create the connecter object.
 
     if (addr->protocol == "tcp") {
         tcp_connecter_t *connecter = new (std::nothrow) tcp_connecter_t (
-            io_thread, this, options, addr, wait_);
+            connect_io_thread, this, options, addr, wait_);
         alloc_assert (connecter);
         launch_child (connecter);
         return;
@@ -493,7 +498,7 @@ void zmq::session_base_t::start_connecting (bool wait_)
 #if !defined ZMQ_HAVE_WINDOWS && !defined ZMQ_HAVE_OPENVMS
     if (addr->protocol == "ipc") {
         ipc_connecter_t *connecter = new (std::nothrow) ipc_connecter_t (
-            io_thread, this, options, addr, wait_);
+            connect_io_thread, this, options, addr, wait_);
         alloc_assert (connecter);
         launch_child (connecter);
         return;
@@ -502,7 +507,7 @@ void zmq::session_base_t::start_connecting (bool wait_)
 #if defined ZMQ_HAVE_TIPC
     if (addr->protocol == "tipc") {
         tipc_connecter_t *connecter = new (std::nothrow) tipc_connecter_t (
-            io_thread, this, options, addr, wait_);
+            connect_io_thread, this, options, addr, wait_);
         alloc_assert (connecter);
         launch_child (connecter);
         return;
@@ -527,7 +532,7 @@ void zmq::session_base_t::start_connecting (bool wait_)
 
             //  PGM sender.
             pgm_sender_t *pgm_sender = new (std::nothrow) pgm_sender_t (
-                io_thread, options);
+                connect_io_thread, options);
             alloc_assert (pgm_sender);
 
             int rc = pgm_sender->init (udp_encapsulation, addr->address.c_str ());
@@ -539,7 +544,7 @@ void zmq::session_base_t::start_connecting (bool wait_)
 
             //  PGM receiver.
             pgm_receiver_t *pgm_receiver = new (std::nothrow) pgm_receiver_t (
-                io_thread, options);
+                connect_io_thread, options);
             alloc_assert (pgm_receiver);
 
             int rc = pgm_receiver->init (udp_encapsulation, addr->address.c_str ());
@@ -555,25 +560,15 @@ void zmq::session_base_t::start_connecting (bool wait_)
 #ifdef ZMQ_HAVE_NORM
     if (addr->protocol == "norm")
     {
-        //  At this point we'll create message pipes to the session straight
-        //  away. There's no point in delaying it as no concept of 'connect'
-        //  exists with NORM anyway.
-        if (options.type == ZMQ_PAIR) {
-
-            //  NORM bi-directional.
-            norm_engine_t* norm_tranceiver =
-                new (std::nothrow) norm_engine_t (io_thread, options);
-            alloc_assert (norm_tranceiver);
-
-            int rc = norm_tranceiver->init (addr->address.c_str (), true, true);
-            errno_assert (rc == 0);
-
-            send_attach (this, norm_tranceiver);
-        }
-        else if (options.type == ZMQ_PUB || options.type == ZMQ_XPUB) {
+        //  For norm, we'll create message pipes to the session straight away.
+        //  There's no point in delaying it, as no concept of 'connect' exists
+        //  with NORM in pub/sub, and for other models, we need to talk through
+        //  those pipes to the norm engine & instance to open connections.
+        if (options.type == ZMQ_PUB || options.type == ZMQ_XPUB) {
 
             //  NORM sender.
-            norm_engine_t* norm_sender = new (std::nothrow) norm_engine_t(io_thread, options);
+            norm_engine_t* norm_sender =
+                new (std::nothrow) norm_engine_t(socket, options);
             alloc_assert (norm_sender);
 
             int rc = norm_sender->init (addr->address.c_str (), true, false);
@@ -581,16 +576,28 @@ void zmq::session_base_t::start_connecting (bool wait_)
 
             send_attach (this, norm_sender);
         }
-        else {  // ZMQ_SUB or ZMQ_XSUB
+        else if (options.type == ZMQ_SUB || options.type == ZMQ_XSUB) { 
 
             //  NORM receiver.
-            norm_engine_t* norm_receiver = new (std::nothrow) norm_engine_t (io_thread, options);
+            norm_engine_t* norm_receiver =
+                new (std::nothrow) norm_engine_t (socket, options);
             alloc_assert (norm_receiver);
 
             int rc = norm_receiver->init (addr->address.c_str (), false, true);
             errno_assert (rc == 0);
 
             send_attach (this, norm_receiver);
+        }
+        else {
+
+            //  NORM bi-directional.
+            norm_engine_t* norm_tranceiver =
+                new (std::nothrow) norm_engine_t (socket, options,
+                                                  addr->address.c_str (),
+                                                  true, true);
+            alloc_assert (norm_tranceiver);
+
+            send_attach (this, norm_tranceiver);
         }
         return;
     }

@@ -22,7 +22,8 @@
 
 #if defined ZMQ_HAVE_NORM
 
-// #define ZMQ_DEBUG_NORM
+#define ZMQ_DEBUG_NORM
+#define ZMQ_DEBUG_NORM_2
 
 #include "platform.hpp"
 #include <string> // tcp_address.hpp needs this
@@ -89,6 +90,9 @@ namespace zmq
         const char *getRawHostName () const { return hostName; }
         int setRawHostName (const char *hostName_);
         bool isRawHostName () const { return (hostName[0] != '\0'); }
+
+        // return  value is the address family
+        static int getEventAddr(NormEvent &event, char *pAddrStr, UINT16 &port);
 
     protected:
 

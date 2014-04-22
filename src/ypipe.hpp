@@ -49,6 +49,7 @@ namespace zmq
             //  (unless pipe is dead, in which case c is set to NULL).
             r = w = f = &queue.back ();
             c.set (&queue.back ());
+            unread = true;
         }
 
         //  The destructor doesn't have to be virtual. It is mad virtual
@@ -121,12 +122,14 @@ namespace zmq
             //  Reader is alive. Nothing special to do now. Just move
             //  the 'first un-flushed item' pointer to 'f'.
             w = f;
-            return true;
+            return (!unread);  /// true;
         }
 
         //  Check whether item is available for reading.
         inline bool check_read ()
         {
+            unread = false;
+
             //  Was the value prefetched already? If so, return.
             if (&queue.front () != r && r)
                  return true;
@@ -198,6 +201,8 @@ namespace zmq
         //  reader is asleep. This pointer should be always accessed using
         //  atomic operations.
         atomic_ptr_t <T> c;
+
+        bool unread;
 
         //  Disable copying of ypipe object.
         ypipe_t (const ypipe_t&);

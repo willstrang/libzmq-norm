@@ -69,8 +69,10 @@ namespace zmq
             unsigned char *buffer = !*data_ ? buf : *data_;
             size_t buffersize = !*data_ ? bufsize : size_;
 
-            if (in_progress == NULL)
+            if (in_progress == NULL) {
+                *data_ = buffer;
                 return 0;
+            }
 
             size_t pos = 0;
             while (pos < buffersize) {
@@ -126,6 +128,8 @@ namespace zmq
             in_progress = msg_;
             (static_cast <T*> (this)->*next) ();
         }
+
+        msg_t *get_in_progress () { return in_progress; }
 
     protected:
 

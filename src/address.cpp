@@ -23,6 +23,7 @@
 #include "tcp_address.hpp"
 #include "ipc_address.hpp"
 #include "tipc_address.hpp"
+#include "norm_address.hpp"
 
 #include <string>
 #include <sstream>
@@ -60,6 +61,14 @@ zmq::address_t::~address_t ()
         }
     }
 #endif
+#if defined ZMQ_HAVE_NORM
+    else if (protocol == "norm") {
+        if (resolved.norm_addr) {
+            delete resolved.norm_addr;
+            resolved.norm_addr = 0;
+        }
+    }
+#endif
 }
 
 int zmq::address_t::to_string (std::string &addr_) const
@@ -79,6 +88,13 @@ int zmq::address_t::to_string (std::string &addr_) const
     else if (protocol == "tipc") {
         if (resolved.tipc_addr) {
             return resolved.tipc_addr->to_string(addr_);
+        }
+    }
+#endif
+#if defined ZMQ_HAVE_NORM
+    else if (protocol == "norm") {
+        if (resolved.norm_addr) {
+            return resolved.norm_addr->to_string(addr_);
         }
     }
 #endif

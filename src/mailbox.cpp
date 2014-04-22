@@ -70,8 +70,11 @@ int zmq::mailbox_t::recv (command_t *cmd_, int timeout_)
 
     //  Wait for signal from the command sender.
     int rc = signaler.wait (timeout_);
-    if (rc != 0 && (errno == EAGAIN || errno == EINTR))
+    if (rc != 0 && (errno == EAGAIN || errno == EINTR)) {
+        if (errno == EAGAIN)
+            active = false;
         return -1;
+    }
 
     //  We've got the signal. Now we can switch into active state.
     active = true;

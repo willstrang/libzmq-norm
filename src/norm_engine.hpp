@@ -1,3 +1,21 @@
+/*
+    Copyright (c) 2007-2014 Contributors as noted in the AUTHORS file
+
+    This file is part of 0MQ.
+
+    0MQ is free software; you can redistribute it and/or modify it under
+    the terms of the GNU Lesser General Public License as published by
+    the Free Software Foundation; either version 3 of the License, or
+    (at your option) any later version.
+
+    0MQ is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU Lesser General Public License for more details.
+
+    You should have received a copy of the GNU Lesser General Public License
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+*/
 
 #ifndef __ZMQ_NORM_ENGINE_HPP_INCLUDED__
 #define __ZMQ_NORM_ENGINE_HPP_INCLUDED__
@@ -5,10 +23,9 @@
 #if defined ZMQ_HAVE_NORM
 
 #include "norm_address.hpp"
-#include "io_object.hpp"
-#include "i_engine.hpp"
+#include "stream_object.hpp"
 #include "options.hpp"
-#include "v2_decoder.hpp"
+#include "i_decoder.hpp"
 #include "v2_encoder.hpp"
 
 #include <normApi.h>
@@ -17,15 +34,25 @@ namespace zmq
 {
     class io_thread_t;
     class session_base_t;
+    class socket_base_t;
     
-    class norm_engine_t : public io_object_t, public i_engine
+    class norm_engine_t : public stream_object_t
     {
     public:
-        norm_engine_t (zmq::io_thread_t *parent_, const options_t &options_);
+        norm_engine_t (zmq::socket_base_t *socket_, const options_t &options_);
+        norm_engine_t (zmq::socket_base_t *socket_, const options_t &options_,
+                       const char* network_, bool send, bool recv);
+        norm_engine_t (zmq::socket_base_t *socket_, const options_t &options_,
+                       NormInstanceHandle norm_instance_,
+                       NormSessionHandle norm_session_,
+                       NormNodeHandle normNodeHandle_,
+                       norm_address_t &client_norm_address_,
+                       norm_address_t &listen_norm_address_);
         ~norm_engine_t ();
             
-        // create NORM instance, session, etc
+        // create NORM instance, session, etc for multicast session: pub/sub
         int init (const char* network_, bool send, bool recv);
+
         // used by norm_listener to start engine for incoming unicast session
         int init (NormInstanceHandle norm_instance_,
                   NormSessionHandle norm_session_,
@@ -57,7 +84,7 @@ namespace zmq
         // i_poll_events interface implementation.
         // (we only need in_event() for NormEvent notification)
         // (i.e., don't have any output events or timers (yet))
-        void in_event ();
+        // void in_event ();
             
     private:
         void unplug ();
@@ -65,7 +92,21 @@ namespace zmq
         unsigned int stream_write (const char* buffer, unsigned int numBytes);
         void stream_flush (bool eom, NormFlushMode flushMode);
         void recv_data (NormObjectHandle stream);    
-                
+
+        // write & read are unused in norm_engine
+        int write (const void *data_, size_t size_);
+        int read (void *data_, size_t size_);
+
+        void engine_add_fd ();
+        void engine_rm_fd ();
+        void engine_set_pollin ();
+        void engine_reset_pollin ();
+        void engine_set_pollout ();
+        void engine_reset_pollout ();
+        fd_t engine_get_fd ();
+        int engine_in_event ();
+        int engine_out_event ();
+
         enum {BUFFER_SIZE = 2048};
                    
         // Used to keep track of streams from multiple senders     
@@ -78,7 +119,7 @@ namespace zmq
                     
             NormObjectHandle GetStreamHandle() const { return norm_stream; }
                     
-            bool Init();
+            bool Init(bool is_twoway_);
                     
             void SetRxReady(bool state) { rx_ready = state; }
             bool IsRxReady () const { return rx_ready; }
@@ -100,7 +141,7 @@ namespace zmq
             // 1 if the message is complete, If an error
             // occurs the 'sync' is dropped and the
             // decoder re-initialized
-            int Decode ();
+            int Decode (bool is_twoway_);
                     
             class List
             {
@@ -141,7 +182,7 @@ namespace zmq
             int64_t                     max_msg_size;
             bool                        in_sync; 
             bool                        rx_ready;
-            v2_decoder_t*               zmq_decoder;
+            i_decoder*                  zmq_decoder;
             bool                        skip_norm_sync;
             unsigned char*              buffer_ptr;
             size_t                      buffer_size;
@@ -153,16 +194,21 @@ namespace zmq
                 
         };  // end class zmq::norm_engine_t::NormRxStreamState
             
-        session_base_t*         zmq_session;
+        /// session_base_t*         zmq_session;
+        /// #define zmq_session session
+        socket_base_t*          socket;
         options_t               options;
         NormInstanceHandle      norm_instance;
+        fd_t                    norm_descriptor;
         handle_t                norm_descriptor_handle;
         NormSessionHandle       norm_session;
         norm_address_t          norm_address;
+        bool                    norm_plugged;
         bool                    is_unicast;
         bool                    is_sender;
         bool                    is_receiver;
         bool                    is_twoway;
+        bool                    is_accept;
             
         // Sender state
         msg_t                   tx_msg;

@@ -31,6 +31,9 @@ namespace zmq
 #if defined ZMQ_HAVE_LINUX
     class tipc_address_t;
 #endif
+#if defined ZMQ_HAVE_NORM
+    class norm_address_t;
+#endif
     struct address_t {
         address_t (const std::string &protocol_, const std::string &address_);
 
@@ -47,6 +50,9 @@ namespace zmq
 #endif
 #if defined ZMQ_HAVE_LINUX
             tipc_address_t *tipc_addr;
+#endif
+#if defined ZMQ_HAVE_NORM
+            norm_address_t *norm_addr;
 #endif
         } resolved;
 

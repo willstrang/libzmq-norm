@@ -26,7 +26,9 @@
 #include "wire.hpp"
 
 zmq::mechanism_t::mechanism_t (const options_t &options_) :
-    options (options_)
+    options (options_),
+    peer_keepalive_ivl (-1),
+    keepalive_found (false)
 {
 }
 
@@ -118,6 +120,14 @@ int zmq::mechanism_t::parse_metadata (const unsigned char *ptr_,
             if (!check_socket_type (socket_type)) {
                 errno = EINVAL;
                 return -1;
+            }
+        }
+        else
+        if (name == "Keepalive") {
+            keepalive_found = true;
+            if (value_length == 2) {
+                peer_keepalive_ivl =
+                    (static_cast <int> (get_uint16 (value))) * 100;
             }
         }
         else {

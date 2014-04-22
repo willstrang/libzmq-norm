@@ -295,3 +295,21 @@ int zmq::norm_address_t::setRawHostName (const char *hostName_)
     hostName[hostLen] = '\0';
     return 0;
 }
+
+int zmq::norm_address_t::getEventAddr(NormEvent &event,
+                                       char *pAddrStr,
+                                       UINT16 &port)
+{
+    char IPaddr[16]; // big enough for IPv6
+    unsigned int addrLen = sizeof (IPaddr);
+    NormNodeGetAddress(event.sender, IPaddr, &addrLen, &port);
+    int addrFamily;
+    if (4 == addrLen)
+        addrFamily = AF_INET;
+    else
+        addrFamily = AF_INET6;
+    pAddrStr[63] = '\0';
+    inet_ntop(addrFamily, IPaddr, pAddrStr, 63);
+
+    return addrFamily;
+}

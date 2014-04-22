@@ -107,8 +107,8 @@ namespace zmq
 
         int monitor (const char *endpoint_, int events_);
 
-        void set_fd(fd_t fd_);
-        fd_t fd();
+        void set_fd (fd_t fd_);
+        fd_t fd ();
 
         void event_connected (std::string &addr_, int fd_);
         void event_connect_delayed (std::string &addr_, int err_);

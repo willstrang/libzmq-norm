@@ -36,6 +36,7 @@
 #include <netdb.h>
 #endif
 
+#if defined ZMQ_HAVE_NORM
 
 zmq::norm_address_t::norm_address_t ()
     : localId(NORM_NODE_ANY)
@@ -313,3 +314,5 @@ int zmq::norm_address_t::getEventAddr(NormEvent &event,
 
     return addrFamily;
 }
+
+#endif

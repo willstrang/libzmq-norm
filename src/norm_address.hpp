@@ -20,12 +20,13 @@
 #ifndef __ZMQ_NORM_ADDRESS_HPP_INCLUDED__
 #define __ZMQ_NORM_ADDRESS_HPP_INCLUDED__
 
+#include "platform.hpp"
+
 #if defined ZMQ_HAVE_NORM
 
 #define ZMQ_DEBUG_NORM
 #define ZMQ_DEBUG_NORM_2
 
-#include "platform.hpp"
 #include <string> // tcp_address.hpp needs this
 #include "tcp_address.hpp"
 

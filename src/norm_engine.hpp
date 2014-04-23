@@ -20,6 +20,8 @@
 #ifndef __ZMQ_NORM_ENGINE_HPP_INCLUDED__
 #define __ZMQ_NORM_ENGINE_HPP_INCLUDED__
 
+#include "platform.hpp"
+
 #if defined ZMQ_HAVE_NORM
 
 #include "norm_address.hpp"

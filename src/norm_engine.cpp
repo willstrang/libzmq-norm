@@ -881,12 +881,6 @@ int zmq::norm_engine_t::engine_in_event()
                     if (!is_accept) 
                         socket->event_connected (sender_endpoint,
                                                  engine_get_fd ());
-
-                    ///  Is this really needed?
-                    if (!norm_tx_ready) {
-                        norm_tx_ready = true;
-                        send_data();
-                    }
                 }
                 break;
 

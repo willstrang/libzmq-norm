@@ -36,7 +36,8 @@ zmq::router_t::router_t (class ctx_t *parent_, uint32_t tid_, int sid_) :
     //  raw_sock functionality in ROUTER is deprecated
     raw_sock (false),       
     probe_router (false),
-    handover (false)
+    handover (false),
+    no_duplicate (false)
 {
     options.type = ZMQ_ROUTER;
     options.recv_identity = true;
@@ -121,7 +122,8 @@ int zmq::router_t::xsetsockopt (int option_, const void *optval_,
             
         case ZMQ_ROUTER_HANDOVER: 
             if (is_int && value >= 0) {
-                handover = (value != 0);
+                handover = (value == 1);
+                no_duplicate = (value == 2);
                 return 0;
             }
             break;
@@ -140,6 +142,11 @@ void zmq::router_t::xpipe_terminated (pipe_t *pipe_)
     if (it != anonymous_pipes.end ())
         anonymous_pipes.erase (it);
     else {
+        //  VeriSign Custom Code - Report session disconnect
+        std::string identityStr((char *)pipe_->get_identity ().data (),
+                                pipe_->get_identity ().size ());
+        event_disconnected_identity(identityStr, fd ());
+
         outpipes_t::iterator it = outpipes.find (pipe_->get_identity ());
         zmq_assert (it != outpipes.end ());
         outpipes.erase (it);
@@ -159,6 +166,11 @@ void zmq::router_t::xread_activated (pipe_t *pipe_)
         if (identity_ok) {
             anonymous_pipes.erase (it);
             fq.attach (pipe_);
+        }
+        else
+        if (no_duplicate) {
+            //anonymous_pipes.erase (it);
+            pipe_->terminate (true);
         }
     }
 }
@@ -454,6 +466,10 @@ bool zmq::router_t::identify_peer (pipe_t *pipe_)
             }
         }
     }
+
+    //  VeriSign Custom Code - Report session connecting
+    std::string identityStr((char *)identity.data (), identity.size ());
+    event_connected_identity(identityStr, (int)fd ());
 
     pipe_->set_identity (identity);
     //  Add the record into output pipes lookup table

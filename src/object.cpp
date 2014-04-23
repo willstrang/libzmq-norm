@@ -167,6 +167,11 @@ void zmq::object_t::destroy_socket (socket_base_t *socket_)
     ctx->destroy_socket (socket_);
 }
 
+void zmq::object_t::log (const char *message_)
+{
+    ctx->log (message_);
+}
+
 zmq::io_thread_t *zmq::object_t::choose_io_thread (uint64_t affinity_)
 {
     return ctx->choose_io_thread (affinity_);

@@ -114,6 +114,16 @@ namespace zmq
         // if true, router socket accepts non-zmq tcp connections
         bool raw_sock;
 
+        //  VeriSign Custom Code
+        //  If nothing received for this many milliseconds, we close the socket
+        //  Default 0, meaning keepalives are not required by this end.
+        int keepalive_ivl;
+
+        //  VeriSign Custom Code
+        //  If handshake is not done after this many milliseconds, close socket
+        //  Default 30000, meaning 30 second handshake timeout.
+        int handshake_ivl;
+
         //  TCP keep-alive settings.
         //  Defaults to -1 = do not change socket options
         int tcp_keepalive;

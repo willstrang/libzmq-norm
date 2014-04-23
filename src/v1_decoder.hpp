@@ -41,6 +41,8 @@ namespace zmq
         int eight_byte_size_ready ();
         int flags_ready ();
         int message_ready ();
+        //  VeriSign Custom Code
+        int keepalive_ready ();
 
         unsigned char tmpbuf [8];
         msg_t in_progress;

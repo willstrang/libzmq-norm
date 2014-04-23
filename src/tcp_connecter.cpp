@@ -124,7 +124,7 @@ void zmq::tcp_connecter_t::out_event ()
     tune_tcp_socket (fd);
     tune_tcp_keepalives (fd, options.tcp_keepalive, options.tcp_keepalive_cnt, options.tcp_keepalive_idle, options.tcp_keepalive_intvl);
 
-    // remember our fd for ZMQ_SRCFD in messages
+    // remember our fd for ZMQ_SRCFD in messages and event monitoring
     socket->set_fd(fd);
 
     //  Create the engine object for this connection.
@@ -347,7 +347,7 @@ void zmq::tcp_connecter_t::close ()
     wsa_assert (rc != SOCKET_ERROR);
 #else
     int rc = ::close (s);
-    errno_assert (rc == 0);
+    errno_assert (rc == 0 || errno == EINTR);
 #endif
     socket->event_closed (endpoint, s);
     s = retired_fd;

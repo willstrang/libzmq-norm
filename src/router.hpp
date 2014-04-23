@@ -121,6 +121,11 @@ namespace zmq
         // will be terminated.
         bool handover;
 
+        // If true, the router will close the new connection upon encountering
+        // a name collision. The new pipe will be terminated,
+        // effectively the opposite of handover.
+        bool no_duplicate;
+
         router_t (const router_t&);
         const router_t &operator = (const router_t&);
     };

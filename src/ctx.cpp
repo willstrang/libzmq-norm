@@ -125,6 +125,15 @@ int zmq::ctx_t::terminate ()
 
         //  First attempt to terminate the context.
         if (!restarted) {
+
+            //  VeriSign Custom Code
+            //  Close the logging infrastructure.
+            log_sync.lock ();
+            int rc = log_socket->close ();
+            zmq_assert (rc == 0);
+            log_socket = NULL;
+            log_sync.unlock ();
+
             //  First send stop command to sockets so that any blocking calls
             //  can be interrupted. If there are no sockets we can ask reaper
             //  thread to stop.
@@ -223,16 +232,18 @@ int zmq::ctx_t::get (int option_)
 zmq::socket_base_t *zmq::ctx_t::create_socket (int type_)
 {
     slot_sync.lock ();
+    //  VeriSign Custom Code - remember was_starting
+    bool was_starting = starting;
     if (unlikely (starting)) {
 
         starting = false;
         //  Initialise the array of mailboxes. Additional three slots are for
-        //  zmq_ctx_term thread and reaper thread.
+        //  zmq_ctx_term thread and reaper thread and internal log socket.
         opt_sync.lock ();
         int mazmq = max_sockets;
         int ios = io_thread_count;
         opt_sync.unlock ();
-        slot_count = mazmq + ios + 2;
+        slot_count = mazmq + ios + 3;
         slots = (mailbox_t**) malloc (sizeof (mailbox_t*) * slot_count);
         alloc_assert (slots);
 
@@ -294,6 +305,16 @@ zmq::socket_base_t *zmq::ctx_t::create_socket (int type_)
     slots [slot] = s->get_mailbox ();
 
     slot_sync.unlock ();
+
+    //  VeriSign Custom Code
+    if (was_starting) {
+        //  Create the logging infrastructure.
+        log_socket = create_socket (ZMQ_PUB);
+        zmq_assert (log_socket);
+        int rc = log_socket->bind ("inproc://zmqlog");
+        zmq_assert (rc == 0);
+    }
+
     return s;
 }
 
@@ -486,6 +507,26 @@ void zmq::ctx_t::connect_inproc_sockets (zmq::socket_base_t *bind_socket_,
         zmq_assert (written);
         pending_connection_.bind_pipe->flush ();
     }
+}
+
+//  VeriSign Custom Code
+void zmq::ctx_t::log (const char *message_)
+{
+    //  Create the log message.
+    msg_t msg;
+    int rc = msg.init_size (strlen (message_) + 1);
+    errno_assert (rc == 0);
+    memcpy (msg.data (), message_, msg.size ());
+
+    //  At this  point we migrate the log socket to the current thread.
+    //  We rely on mutex for executing the memory barrier.
+    log_sync.lock ();
+    if (log_socket)
+        log_socket->send (&msg, 0);
+    log_sync.unlock ();
+
+    rc = msg.close ();
+    errno_assert (rc == 0);
 }
 
 //  The last used socket ID, or 0 if no socket was used so far. Note that this

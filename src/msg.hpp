@@ -51,7 +51,11 @@ namespace zmq
             command = 2,        //  Command frame (see ZMTP spec)
             credential = 32,
             identity = 64,
-            shared = 128
+            shared = 128,
+            //  VeriSign Custom Code - flag identifies V1 keepalive settings
+            keepalive_v1 = 64,
+            //  VeriSign Custom Code - mask bits required by V1 framing check
+            mask_v1 = 0x3E
         };
 
         bool check ();

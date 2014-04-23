@@ -47,6 +47,9 @@ zmq::options_t::options_t () :
     filter (false),
     recv_identity (false),
     raw_sock (false),
+    //  VeriSign Custom Code
+    keepalive_ivl (0),
+    handshake_ivl (30000),
     tcp_keepalive (-1),
     tcp_keepalive_cnt (-1),
     tcp_keepalive_idle (-1),
@@ -296,6 +299,25 @@ int zmq::options_t::setsockopt (int option_, const void *optval_,
             }
             break;
 #       endif
+
+        //  VeriSign Custom Code
+        case ZMQ_KEEPALIVE_IVL:
+            // Don't allow a keepalive interval below .1 second, except 0 = off
+            // Don't allow a keepalive interval above 6553 seconds
+            if (is_int && (value == 0 || (value >= 100 && value <= 6553500))) {
+                keepalive_ivl = value;
+                return 0;
+            }
+            break;
+
+        //  VeriSign Custom Code
+        case ZMQ_HANDSHAKE_IVL:
+            // Don't allow a handshake interval below 0
+            if (is_int && value >= 0) {
+                handshake_ivl = value;
+                return 0;
+            }
+            break;
 
         case ZMQ_PLAIN_SERVER:
             if (is_int && (value == 0 || value == 1)) {
@@ -594,6 +616,21 @@ int zmq::options_t::getsockopt (int option_, void *optval_, size_t *optvallen_)
         case ZMQ_MECHANISM:
             if (is_int) {
                 *value = mechanism;
+                return 0;
+            }
+            break;
+
+        //  VeriSign Custom Code
+        case ZMQ_KEEPALIVE_IVL:
+            if (is_int) {
+                *value = keepalive_ivl;
+                return 0;
+            }
+            break;
+
+        case ZMQ_HANDSHAKE_IVL:
+            if (is_int) {
+                *value = handshake_ivl;
                 return 0;
             }
             break;

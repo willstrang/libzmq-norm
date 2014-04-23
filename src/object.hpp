@@ -54,6 +54,9 @@ namespace zmq
         void send_inproc_connected (zmq::socket_base_t *socket_);
         void send_bind (zmq::own_t *destination_, zmq::pipe_t *pipe_, bool inc_seqnum_ = true);
 
+        //  Logs a message.
+        void log (const char *message_);
+
     protected:
 
         //  Using following function, socket is able to access global
@@ -65,9 +68,6 @@ namespace zmq
         void connect_pending (const char *addr_, zmq::socket_base_t *bind_socket_);
 
         void destroy_socket (zmq::socket_base_t *socket_);
-
-        //  Logs an message.
-        void log (const char *format_, ...);
 
         //  Chooses least loaded I/O thread.
         zmq::io_thread_t *choose_io_thread (uint64_t affinity_);

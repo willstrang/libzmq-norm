@@ -64,6 +64,9 @@ namespace zmq
 
         blob_t get_user_id () const;
 
+        int get_peer_keepalive_ivl () const { return peer_keepalive_ivl; }
+        bool get_keepalive_found () const { return keepalive_found; }
+
     protected:
 
         //  Only used to identify the socket for the Socket-Type
@@ -96,6 +99,9 @@ namespace zmq
         blob_t identity;
 
         blob_t user_id;
+
+        int peer_keepalive_ivl;
+        bool keepalive_found;
 
         //  Returns true iff socket associated with the mechanism
         //  is compatible with a given socket type 'type_'.

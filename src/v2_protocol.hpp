@@ -31,7 +31,8 @@ namespace zmq
         {
             more_flag = 1,
             large_flag = 2,
-            command_flag = 4
+            command_flag = 4,
+            unused_flags = 0xF8
         };
     };
 }

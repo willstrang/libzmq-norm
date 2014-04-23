@@ -64,6 +64,12 @@ int zmq::v2_decoder_t::flags_ready ()
     else
         next_step (tmpbuf, 1, &v2_decoder_t::one_byte_size_ready);
 
+    // validate that all other flags are unset, for mis-framing detection
+    if (tmpbuf [0] & v2_protocol_t::unused_flags) {
+        errno = EPROTO;
+        return -1;
+    }
+
     return 0;
 }
 

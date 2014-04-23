@@ -53,13 +53,15 @@ void zmq::v1_encoder_t::message_ready ()
     //  message size. In both cases 'flags' field follows.
     if (size < 255) {
         tmpbuf [0] = (unsigned char) size;
-        tmpbuf [1] = (in_progress->flags () & msg_t::more);
+        //  VeriSign Custom Code - set mask bits required by V1 framing check
+        tmpbuf [1] = (in_progress->flags () & msg_t::more) | msg_t::mask_v1;
         next_step (tmpbuf, 2, &v1_encoder_t::size_ready, false);
     }
     else {
         tmpbuf [0] = 0xff;
         put_uint64 (tmpbuf + 1, size);
-        tmpbuf [9] = (in_progress->flags () & msg_t::more);
+        //  VeriSign Custom Code - set mask bits required by V1 framing check
+        tmpbuf [9] = (in_progress->flags () & msg_t::more) | msg_t::mask_v1;
         next_step (tmpbuf, 10, &v1_encoder_t::size_ready, false);
     }
 }

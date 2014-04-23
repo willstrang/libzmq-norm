@@ -39,6 +39,8 @@ void zmq::io_object_t::plug (io_thread_t *io_thread_)
 
     //  Retrieve the poller from the thread we are running in.
     poller = io_thread_->get_poller ();
+    //  VeriSign Custom Code
+    io_thread = io_thread_;
 }
 
 void zmq::io_object_t::unplug ()
@@ -48,6 +50,8 @@ void zmq::io_object_t::unplug ()
     //  Forget about old poller in preparation to be migrated
     //  to a different I/O thread.
     poller = NULL;
+    //  VeriSign Custom Code
+    io_thread = NULL;
 }
 
 zmq::io_object_t::handle_t zmq::io_object_t::add_fd (fd_t fd_)

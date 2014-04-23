@@ -20,6 +20,8 @@
 #ifndef __ZMQ_TCP_ADDRESS_HPP_INCLUDED__
 #define __ZMQ_TCP_ADDRESS_HPP_INCLUDED__
 
+#include <string>
+
 #include "platform.hpp"
 
 #if defined ZMQ_HAVE_WINDOWS

@@ -122,7 +122,7 @@ void zmq::tcp_listener_t::close ()
     wsa_assert (rc != SOCKET_ERROR);
 #else
     int rc = ::close (s);
-    errno_assert (rc == 0);
+    errno_assert (rc == 0 || errno == EINTR);
 #endif
     socket->event_closed (endpoint, s);
     s = retired_fd;
@@ -302,7 +302,7 @@ zmq::fd_t zmq::tcp_listener_t::accept ()
             wsa_assert (rc != SOCKET_ERROR);
 #else
             int rc = ::close (sock);
-            errno_assert (rc == 0);
+            errno_assert (rc == 0 || errno == EINTR);
 #endif
             return retired_fd;
         }

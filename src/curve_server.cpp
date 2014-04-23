@@ -491,6 +491,12 @@ int zmq::curve_server_t::produce_ready (msg_t *msg_)
         ptr += add_property (ptr, "Identity",
             options.identity, options.identity_size);
 
+    //  Add keepalive property, with 16 bit value in tenths of a second
+    unsigned char keepalive_ivl_nbo[2];
+    put_uint16 (keepalive_ivl_nbo,
+                static_cast <uint16_t> (options.keepalive_ivl / 100));
+    ptr += add_property (ptr, "Keepalive",
+                         keepalive_ivl_nbo, sizeof(keepalive_ivl_nbo));
     const size_t mlen = ptr - ready_plaintext;
 
     memcpy (ready_nonce, "CurveZMQREADY---", 16);

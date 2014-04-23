@@ -269,6 +269,13 @@ int zmq::plain_mechanism_t::produce_initiate (msg_t *msg_) const
             options.identity, options.identity_size);
     }
 
+    //  Add keepalive property, with 16 bit value in tenths of a second
+    unsigned char keepalive_ivl_nbo[2];
+    put_uint16 (keepalive_ivl_nbo,
+                static_cast <uint16_t> (options.keepalive_ivl / 100));
+    ptr += add_property (ptr, "Keepalive",
+                         keepalive_ivl_nbo, sizeof(keepalive_ivl_nbo));
+
     const size_t command_size = ptr - command_buffer;
     const int rc = msg_->init_size (command_size);
     errno_assert (rc == 0);
@@ -314,6 +321,13 @@ int zmq::plain_mechanism_t::produce_ready (msg_t *msg_) const
         ptr += add_property (ptr, "Identity",
             options.identity, options.identity_size);
     }
+
+    //  Add keepalive property, with 16 bit value in tenths of a second
+    unsigned char keepalive_ivl_nbo[2];
+    put_uint16 (keepalive_ivl_nbo,
+                static_cast <uint16_t> (options.keepalive_ivl / 100));
+    ptr += add_property (ptr, "Keepalive",
+                         keepalive_ivl_nbo, sizeof(keepalive_ivl_nbo));
 
     const size_t command_size = ptr - command_buffer;
     const int rc = msg_->init_size (command_size);

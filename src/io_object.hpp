@@ -47,6 +47,10 @@ namespace zmq
         void plug (zmq::io_thread_t *io_thread_);
         void unplug ();
 
+        //  VeriSign Custom Code
+        //  To be used only for logging.
+        class io_thread_t *get_io_thread() { return io_thread; }
+
     protected:
 
         typedef poller_t::handle_t handle_t;
@@ -69,6 +73,10 @@ namespace zmq
     private:
 
         poller_t *poller;
+
+        //  VeriSign Custom Code
+        //  I/O thread the object is plugged into. To be used only for logging.
+        class io_thread_t *io_thread;
 
         io_object_t (const io_object_t&);
         const io_object_t &operator = (const io_object_t&);

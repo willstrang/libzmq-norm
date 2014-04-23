@@ -130,11 +130,21 @@ int zmq::v1_decoder_t::eight_byte_size_ready ()
 
 int zmq::v1_decoder_t::flags_ready ()
 {
+    //  VeriSign Custom Code
+    // validate the flags, for mis-framing detection
+    if ((tmpbuf [0] & msg_t::mask_v1) != (unsigned char)msg_t::mask_v1 &&
+        tmpbuf [0] != msg_t::keepalive_v1) {
+        errno = EPROTO;
+        return -1;
+    }
+
     //  Store the flags from the wire into the message structure.
     in_progress.set_flags (tmpbuf [0] & msg_t::more);
 
+    //  VeriSign Custom Code
     next_step (in_progress.data (), in_progress.size (),
-        &v1_decoder_t::message_ready);
+               ((tmpbuf [0] & msg_t::keepalive_v1) ?
+                &v1_decoder_t::keepalive_ready : &v1_decoder_t::message_ready));
 
     return 0;
 }
@@ -145,4 +155,13 @@ int zmq::v1_decoder_t::message_ready ()
     //  new message. (in_progress is a 0-byte message after this point.)
     next_step (tmpbuf, 1, &v1_decoder_t::one_byte_size_ready);
     return 1;
+}
+
+//  VeriSign Custom Code
+int zmq::v1_decoder_t::keepalive_ready ()
+{
+    //  Keepalive msg is completely read. Push it further and start reading
+    //  new message. (in_progress is a 0-byte message after this point.)
+    next_step (tmpbuf, 1, &v1_decoder_t::one_byte_size_ready);
+    return 2;  // means a keepalive is ready, not a normal message
 }

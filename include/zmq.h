@@ -296,6 +296,8 @@ ZMQ_EXPORT char *zmq_msg_gets (zmq_msg_t *msg, char *property);
 #define ZMQ_IPC_FILTER_UID 59
 #define ZMQ_IPC_FILTER_GID 60
 #define ZMQ_CONNECT_RID 61 
+#define ZMQ_KEEPALIVE_IVL 62
+#define ZMQ_HANDSHAKE_IVL 63
 
 /*  Message options                                                           */
 #define ZMQ_MORE 1
@@ -337,12 +339,17 @@ ZMQ_EXPORT char *zmq_msg_gets (zmq_msg_t *msg, char *property);
 #define ZMQ_EVENT_DISCONNECTED 512
 #define ZMQ_EVENT_MONITOR_STOPPED 1024
 
+#define ZMQ_EVENT_CONNECTED_IDENTITY 2048
+#define ZMQ_EVENT_DISCONNECTED_IDENTITY 4096
+
 #define ZMQ_EVENT_ALL ( ZMQ_EVENT_CONNECTED | ZMQ_EVENT_CONNECT_DELAYED | \
                         ZMQ_EVENT_CONNECT_RETRIED | ZMQ_EVENT_LISTENING | \
                         ZMQ_EVENT_BIND_FAILED | ZMQ_EVENT_ACCEPTED | \
                         ZMQ_EVENT_ACCEPT_FAILED | ZMQ_EVENT_CLOSED | \
                         ZMQ_EVENT_CLOSE_FAILED | ZMQ_EVENT_DISCONNECTED | \
-                        ZMQ_EVENT_MONITOR_STOPPED)
+                        ZMQ_EVENT_MONITOR_STOPPED | \
+                        ZMQ_EVENT_CONNECTED_IDENTITY | \
+                        ZMQ_EVENT_DISCONNECTED_IDENTITY)
 
 /*  Socket event data  */
 typedef struct {

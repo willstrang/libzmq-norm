@@ -112,6 +112,9 @@ namespace zmq
         void pend_connection (const char *addr_, pending_connection_t &pending_connection_);
         void connect_pending (const char *addr_, zmq::socket_base_t *bind_socket_);
 
+        //  Logging to inproc://zmqlog socket
+        void log (const char *message_);
+
         enum {
             term_tid = 0,
             reaper_tid = 1
@@ -187,6 +190,11 @@ namespace zmq
 
         //  Synchronisation of access to context options.
         mutex_t opt_sync;
+
+        //  PUB socket for logging. The socket is shared among all the threads,
+        //  thus it is synchronised by a mutex.
+        zmq::socket_base_t *log_socket;
+        mutex_t log_sync;
 
         ctx_t (const ctx_t&);
         const ctx_t &operator = (const ctx_t&);

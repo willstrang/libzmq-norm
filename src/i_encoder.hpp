@@ -43,6 +43,8 @@ namespace zmq
         //  Load a new message into encoder.
         virtual void load_msg (msg_t *msg_) = 0;
 
+        virtual msg_t *get_in_progress () = 0;
+
     };
 
 }

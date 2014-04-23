@@ -315,4 +315,4 @@ int zmq::norm_address_t::getEventAddr(NormEvent &event,
     return addrFamily;
 }
 
-#endif
+#endif  //  ZMQ_HAVE_NORM

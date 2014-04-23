@@ -86,8 +86,8 @@ namespace zmq
         // i_poll_events interface implementation.
         // (we only need in_event() for NormEvent notification)
         // (i.e., don't have any output events or timers (yet))
-        // void in_event ();
-            
+        void in_event ();
+
     private:
         void unplug ();
         void send_data ();

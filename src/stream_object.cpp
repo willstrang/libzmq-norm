@@ -34,6 +34,13 @@
 #include <new>
 #include <sstream>
 
+#if defined ZMQ_HAVE_NORM
+#include "norm_address.hpp"
+#if defined ZMQ_DEBUG_NORM
+#include <iostream>
+#endif
+#endif
+
 #include "stream_object.hpp"
 #include "io_thread.hpp"
 #include "session_base.hpp"
@@ -127,16 +134,6 @@ void zmq::stream_object_t::plug (io_thread_t *io_thread_,
     //  engine class must do any add_fd or equivalent
     engine_add_fd ();
     io_error = false;
-
-#ifdef UNUSED
-    if (get_io_thread ()) {
-        char buf[120];
-        sprintf(buf, "INIT: plug in stream object for endpoint %s",
-                endpoint.c_str ());
-        get_io_thread ()->log (buf);
-        //get_io_thread ()->log ("INIT: plug in stream object");
-    }
-#endif
 
     if (options.raw_sock) {
         // no handshaking for raw sock, instantiate raw encoder and decoders
@@ -250,15 +247,25 @@ void zmq::stream_object_t::terminate ()
 
 void zmq::stream_object_t::in_event ()
 {
+    if (!plugged) return;
+
     zmq_assert (!io_error);
 
-    engine_in_event();
-
     //  If still handshaking, receive and process the greeting message.
-    if (unlikely (handshaking))
-        if (!handshake ())
-            return;
+    if (unlikely (handshaking)) {
+        if (!handshake ()) {
+#if defined ZMQ_DEBUG_NORM
+            std::cout << "handshake call returned FALSE with bytes read "
+                      << greeting_bytes_read << std::endl << std::flush;
+#endif
 
+            return;
+        }
+#if defined ZMQ_DEBUG_NORM
+        std::cout << "handshake call returned TRUE with bytes read "
+                  << greeting_bytes_read << std::endl << std::flush;
+#endif
+    }
     zmq_assert (decoder);
 
     //  If there has been an I/O error, stop polling.
@@ -491,6 +498,11 @@ void zmq::stream_object_t::restart_input ()
 
 bool zmq::stream_object_t::handshake ()
 {
+#if defined ZMQ_DEBUG_NORM
+    static unsigned hcall = 1;
+    std::cout << "handshake call " << hcall++ << " with bytes read "
+              << greeting_bytes_read << std::endl << std::flush;
+#endif
     zmq_assert (handshaking);
     //  When using_norm, the whole greeting gets sent together, not in 2 parts
     zmq_assert (greeting_bytes_read < greeting_size ||
@@ -501,7 +513,7 @@ bool zmq::stream_object_t::handshake ()
         const int n = read (greeting_recv + greeting_bytes_read,
                             greeting_size - greeting_bytes_read);
         if (n == 0) {
-            /// hack to wait for receive
+            // NORM transport can reasonably read 0 bytes at this point
             if (!using_norm)
                 error ();
             return false;
@@ -511,13 +523,6 @@ bool zmq::stream_object_t::handshake ()
                 error ();
             return false;
         }
-
-#ifdef UNUSED
-        if (has_handshake_timer) {
-            cancel_timer (handshake_timer_id);
-            has_handshake_timer = false;
-        }
-#endif
 
         greeting_bytes_read += n;
 
@@ -588,14 +593,16 @@ bool zmq::stream_object_t::handshake ()
     //  If so, we send and receive rest of identity message
     if (greeting_recv [0] != 0xff || !(greeting_recv [9] & 0x01)) {
         if (using_norm) {
-            //  NORM is not supported in zmq versions to require V1 protocols
+            //  NORM is not supported in older zmq versions with V1 protocols
             /// TBD - close or ignore the connection instead?
-            zmq_assert (false);
+            error ();
+            return false;
         }
         encoder = new (std::nothrow) v1_encoder_t (out_batch_size);
         alloc_assert (encoder);
 
-        decoder = new (std::nothrow) v1_decoder_t (in_batch_size, options.maxmsgsize);
+        decoder = new (std::nothrow) v1_decoder_t (in_batch_size,
+                                                   options.maxmsgsize);
         alloc_assert (decoder);
 
         //  We have already sent the message header.
@@ -663,20 +670,23 @@ bool zmq::stream_object_t::handshake ()
             in_batch_size, options.maxmsgsize);
         alloc_assert (decoder);
 
-        if (memcmp (greeting_recv + 12, "NULL\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0", 20) == 0) {
+        if (memcmp (greeting_recv + 12,
+                    "NULL\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0", 20) == 0) {
             mechanism = new (std::nothrow)
                 null_mechanism_t (session, peer_address, options);
             alloc_assert (mechanism);
         }
         else
-        if (memcmp (greeting_recv + 12, "PLAIN\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0", 20) == 0) {
+        if (memcmp (greeting_recv + 12,
+                    "PLAIN\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0", 20) == 0) {
             mechanism = new (std::nothrow)
                 plain_mechanism_t (session, peer_address, options);
             alloc_assert (mechanism);
         }
 #ifdef HAVE_LIBSODIUM
         else
-        if (memcmp (greeting_recv + 12, "CURVE\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0", 20) == 0) {
+        if (memcmp (greeting_recv + 12,
+                    "CURVE\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0", 20) == 0) {
             if (options.as_server)
                 mechanism = new (std::nothrow)
                     curve_server_t (session, peer_address, options);
@@ -693,10 +703,6 @@ bool zmq::stream_object_t::handshake ()
         write_msg = &stream_object_t::process_handshake_command;
     }
 
-    // Start polling for output if necessary.
-    if (outsize == 0)
-        engine_set_pollout ();
-
     //  Handshaking was successful.
     //  Switch into the normal message flow.
     handshaking = false;
@@ -707,6 +713,10 @@ bool zmq::stream_object_t::handshake ()
         cancel_timer (handshake_timer_id);
         has_handshake_timer = false;
     }
+
+    // Start polling for output if necessary.
+    if (outsize == 0)
+        engine_set_pollout ();
 
     return true;
 }
@@ -806,11 +816,12 @@ void zmq::stream_object_t::mechanism_ready ()
     if (mechanism->get_keepalive_found ()) {
         //  Both ends support keepalives
 
-        if (mechanism->get_peer_keepalive_ivl () < 0) {
-            if (get_io_thread ())
-                get_io_thread ()->log ("KEEP: peer Keepalive parameter has bad value");
-        } else
+        if (mechanism->get_peer_keepalive_ivl () >= 0)
             peer_keepalive_ivl = mechanism->get_peer_keepalive_ivl ();
+#if defined ZMQ_DEBUG_NORM
+        else if (get_io_thread ())
+            get_io_thread ()->log ("KEEP: peer_keepalive_ivl has bad value");
+#endif
 
         //  If either end has keepalives enabled, start our timer
         if (options.keepalive_ivl > 0 || peer_keepalive_ivl > 0)
@@ -944,15 +955,19 @@ int zmq::stream_object_t::recv_keepalive_v1 (msg_t *msg_)
             if (plugged && peer_keepalive_ivl != keepalive_ivl_old) {
                 set_keepalive_timer ();
             }
+#if defined ZMQ_DEBUG_KEEPALIVE
         } else if (get_io_thread ()) {
             get_io_thread ()->log ("KEEP: keepalive message has bad type");
             errno = EPROTO;
             return -1;
+#endif
         }
+#if defined ZMQ_DEBUG_KEEPALIVE
     } else if (get_io_thread ()) {
         get_io_thread ()->log ("KEEP: keepalive message has bad length");
         errno = EPROTO;
         return -1;
+#endif
     }
     return 0;
 }
@@ -1042,6 +1057,7 @@ void zmq::stream_object_t::set_keepalive_timer ()
         keepalive_ticks_in = 0;
         keepalive_ticks_out = 0;
         keepalive_ivl_time = time;
+#if defined ZMQ_DEBUG_KEEPALIVE
         if (get_io_thread ()) {
             char buf[120];
             sprintf(buf,
@@ -1053,6 +1069,7 @@ void zmq::stream_object_t::set_keepalive_timer ()
                     time, options.keepalive_ivl, keepalive_limit_in,
                     peer_keepalive_ivl, keepalive_limit_out);
             get_io_thread ()->log (buf);
+#endif
         }
     } else {
         keepalive_ivl_time = 0;
@@ -1060,7 +1077,7 @@ void zmq::stream_object_t::set_keepalive_timer ()
 
     if (keepalive_ivl_old != keepalive_ivl_time ||
         has_keepalive_timer != (keepalive_ivl_time > 0)) {
-#ifdef UNUSED
+#if defined ZMQ_DEBUG_KEEPALIVE
         // optional internal log message for debugging
         if (get_io_thread ()) {
             char buf[80];
@@ -1100,8 +1117,10 @@ void zmq::stream_object_t::timer_event (int id_)
     if (unlikely (id_ == handshake_timer_id)) {
         zmq_assert (has_handshake_timer);
         has_handshake_timer = false;
+#if defined ZMQ_DEBUG_KEEPALIVE
         if (get_io_thread ())
             get_io_thread ()->log ("INIT: handshake timeout, detach socket");
+#endif
         error ();
         return;
     }
@@ -1113,15 +1132,19 @@ void zmq::stream_object_t::timer_event (int id_)
     zmq_assert (id_ == keepalive_timer_id);
 
     if (keepalive_limit_in && ++keepalive_ticks_in > keepalive_limit_in) {
+#if defined ZMQ_DEBUG_KEEPALIVE
         if (get_io_thread ())
             get_io_thread ()->log ("KEEP: keepalive timeout, detach socket");
+#endif
         error ();
         return;
     }
 
     if (unlikely (session && !session->has_pipe ())) {
+#if defined ZMQ_DEBUG_KEEPALIVE
         if (get_io_thread ())
             get_io_thread ()->log ("KEEP: session pipe closed, detach socket");
+#endif
         error ();
         return;
     }

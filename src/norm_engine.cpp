@@ -41,7 +41,6 @@
 zmq::norm_engine_t::norm_engine_t(zmq::socket_base_t *socket_,
                                   const options_t& options_)
     : stream_object_t(options_, std::string()),
-      /// zmq_session(NULL),
       socket (socket_),
       options(options_),  
       norm_instance(NORM_INSTANCE_INVALID),
@@ -86,7 +85,6 @@ zmq::norm_engine_t::norm_engine_t(zmq::socket_base_t *socket_,
                                   norm_address_t &client_norm_address_,
                                   norm_address_t &listen_norm_address_)
     : stream_object_t(options_, std::string()),
-      /// zmq_session(NULL),
       socket (socket_),
       options(options_),  
       norm_instance(NORM_INSTANCE_INVALID),
@@ -134,7 +132,6 @@ zmq::norm_engine_t::norm_engine_t(zmq::socket_base_t *socket_,
                                   const options_t& options_,
                                   const char* network_, bool send, bool recv)
     : stream_object_t(options_, std::string()),
-      /// zmq_session(NULL),
       socket (socket_),
       options(options_),  
       norm_instance(NORM_INSTANCE_INVALID),
@@ -203,8 +200,8 @@ int zmq::norm_engine_t::init (NormInstanceHandle norm_instance_,
     norm_descriptor = NormGetDescriptor(norm_instance);
     norm_session = norm_session_;
 
-    NormSetDefaultSyncPolicy(norm_session, NORM_SYNC_CURRENT);
-    /// NormSetDefaultSyncPolicy(norm_session, NORM_SYNC_STREAM);
+    /// NormSetDefaultSyncPolicy(norm_session, NORM_SYNC_CURRENT);
+    NormSetDefaultSyncPolicy(norm_session, NORM_SYNC_STREAM);
 
     NormSetCongestionControl(norm_session, true);  // ??
 
@@ -365,8 +362,9 @@ int zmq::norm_engine_t::init(const char* network_, bool send, bool recv)
         // NORM_SYNC_CURRENT provides "instant" receiver sync to the senders
         // _current_ message transmission, which might be the most appropriate
         // behavior for 2-way unicast messaging patterns
-        NormSetDefaultSyncPolicy(norm_session, NORM_SYNC_CURRENT);
-        /// NormSetDefaultSyncPolicy(norm_session, NORM_SYNC_STREAM);
+
+        /// NormSetDefaultSyncPolicy(norm_session, NORM_SYNC_CURRENT);
+        NormSetDefaultSyncPolicy(norm_session, NORM_SYNC_STREAM);
     }
     else {
         // For one-way possibly-multicast pub/sub pattern, NORM_SYNC_STREAM
@@ -726,6 +724,11 @@ int zmq::norm_engine_t::engine_out_event()
 
 int zmq::norm_engine_t::engine_in_event()
 {
+    return 0;
+}
+
+void zmq::norm_engine_t::in_event()
+{
     // This means a NormEvent is probably pending, 
     // so call NormGetNextEvent() and handle
     int events_processed = 0;
@@ -916,7 +919,9 @@ int zmq::norm_engine_t::engine_in_event()
         }  // end switch(event.type)
     }
 
-    return events_processed;
+    /// I don't think this call is needed. The calls in recv_data () are enough
+    // stream_object_t::in_event ();
+
 }  // zmq::norm_engine_t::engine_in_event()
 
 void zmq::norm_engine_t::restart_input()
@@ -1075,7 +1080,6 @@ void zmq::norm_engine_t::recv_data(NormObjectHandle object)
             NormRxStreamState* rxState;
             while (NULL != (rxState = iterator.GetNextItem()))
             {
-                //#ifdef UNUSED
                 if (is_twoway) {
                     if (!zmq_input_ready) break;
                     if (!decoder) {
@@ -1091,11 +1095,11 @@ void zmq::norm_engine_t::recv_data(NormObjectHandle object)
                               << rxState->AccessMsg()->size () << " "
                               << std::endl << std::flush;
 #endif
+                    // Allow stream_object_t to process the received msg
                     stream_object_t::in_event ();
                     if (msg_ready_list.IsEmpty ()) break;
                     continue;
                 }
-                //#endif
 
                 msg_t* msg = rxState->AccessMsg();
                 if (-1 == session->push_msg(msg))
@@ -1321,8 +1325,6 @@ void zmq::norm_engine_t::engine_rm_fd ()
 
 void zmq::norm_engine_t::engine_set_pollin ()
 {
-    /// zmq_assert (handle);
-    /// set_pollin (handle);
     zmq_input_ready = true;
     if (!msg_ready_list.IsEmpty ())
         stream_object_t::in_event ();
@@ -1331,22 +1333,16 @@ void zmq::norm_engine_t::engine_set_pollin ()
 
 void zmq::norm_engine_t::engine_reset_pollin ()
 {
-    /// zmq_assert (handle);
-    /// reset_pollin (handle);
     zmq_input_ready = false;
 }
 
 void zmq::norm_engine_t::engine_set_pollout ()
 {
-    /// zmq_assert (handle);
-    /// set_pollout (handle);
     restart_output();
 }
 
 void zmq::norm_engine_t::engine_reset_pollout ()
 {
-    /// zmq_assert (handle);
-    /// reset_pollout (handle);
 #ifdef ZMQ_DEBUG_NORM
     std::cout << "NORM TX flush " << (norm_acking ? "acking " : "")
               << "tx_index: " << tx_index << " tx_len: " << tx_len

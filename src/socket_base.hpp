@@ -123,6 +123,9 @@ namespace zmq
         void event_connected_identity (std::string &identity_, int fd_);
         void event_disconnected_identity (std::string &identity_, int fd_);
 
+        bool is_terminate_unpiped_session () {
+            return terminate_unpiped_session; }
+
     protected:
 
         socket_base_t (zmq::ctx_t *parent_, uint32_t tid_, int sid_);
@@ -202,6 +205,11 @@ namespace zmq
         //  destruction is delayed while we unwind the stack to the point
         //  where it doesn't intersect the object being destroyed.
         bool destroyed;
+
+        //  VeriSign Custom Code
+        //  If true, when a pipe to a session is terminated for any reason,
+        //  also terminate the session and any engine the session has.
+        bool terminate_unpiped_session;
 
         //  Parse URI string.
         int parse_uri (const char *uri_, std::string &protocol_,

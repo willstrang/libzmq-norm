@@ -216,7 +216,8 @@ void zmq::session_base_t::pipe_terminated (pipe_t *pipe_)
         // Remove the pipe from the detached pipes set
         terminating_pipes.erase (pipe_);
 
-    if (!is_terminating () && options.raw_sock) {
+    if (!is_terminating () &&
+        (options.raw_sock || socket->is_terminate_unpiped_session ())) {
         if (engine) {
             engine->terminate ();
             engine = NULL;
@@ -361,6 +362,7 @@ void zmq::session_base_t::process_attach (i_engine *engine_)
         send_bind (socket, pipes [1]);
     }
 
+    //  The norm engine logic doesn't cause this, so we must do it here
     if (addr && addr->protocol == "norm")
         pipe->check_read ();
 

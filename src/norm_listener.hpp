@@ -101,7 +101,7 @@ namespace zmq
         std::string endpoint;
 
 #ifdef ZMQ_DEBUG_NORM
-        bool is_twoway;
+        bool is_stream;
 
         // Used to keep track of streams from multiple senders     
         class NormRxStreamState

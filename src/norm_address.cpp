@@ -303,6 +303,7 @@ int zmq::norm_address_t::getEventAddr(NormEvent &event,
 {
     char IPaddr[16]; // big enough for IPv6
     unsigned int addrLen = sizeof (IPaddr);
+    ::memset (IPaddr, 0, addrLen);
     NormNodeGetAddress(event.sender, IPaddr, &addrLen, &port);
     int addrFamily;
     if (4 == addrLen)

@@ -121,7 +121,7 @@ int zmq::router_t::xsetsockopt (int option_, const void *optval_,
             break;
             
         case ZMQ_ROUTER_HANDOVER: 
-            if (is_int && value >= 0) {
+            if (is_int && value >= 0 && value <= 2) {
                 handover = (value == 1);
                 no_duplicate = (value == 2);
                 return 0;
@@ -441,6 +441,17 @@ bool zmq::router_t::identify_peer (pipe_t *pipe_)
                     //  Ignore peers with duplicate ID
                     return false;
                 else {
+                    //  VeriSign Custom Code - Report session disconnect with
+                    //  original identity rather than new temporary, and ahead
+                    //  of event_connected_identity () below for same identity.
+                    //  event_disconnected_identity will get called later for
+                    //  the new temporary identity, and without any preceeding
+                    //  event_connected_identity () call, which the monitoring
+                    //  logic will just have to know to expect and ignore.
+                    std::string identityStr((char *)identity.data (),
+                                            identity.size ());
+                    event_disconnected_identity(identityStr, fd ());
+
                     //  We will allow the new connection to take over this
                     //  identity. Temporarily assign a new identity to the 
                     //  existing pipe so we can terminate it asynchronously.
@@ -453,14 +464,14 @@ bool zmq::router_t::identify_peer (pipe_t *pipe_)
                     outpipe_t existing_outpipe = 
                         {it->second.pipe, it->second.active};
                 
-                    ok = outpipes.insert (outpipes_t::value_type (
-                        new_identity, existing_outpipe)).second;
-                    zmq_assert (ok);
-                
                     //  Remove the existing identity entry to allow the new
                     //  connection to take the identity.
                     outpipes.erase (it);
 
+                    ok = outpipes.insert (outpipes_t::value_type (
+                        new_identity, existing_outpipe)).second;
+                    zmq_assert (ok);
+                
                     existing_outpipe.pipe->terminate (true);
                 }
             }

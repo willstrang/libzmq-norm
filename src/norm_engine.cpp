@@ -38,91 +38,94 @@
 #include <iostream>
 #endif
 
-zmq::norm_engine_t::norm_engine_t(zmq::socket_base_t *socket_,
-                                  const options_t& options_)
-    : stream_object_t(options_, std::string()),
+zmq::norm_engine_t::norm_engine_t (zmq::socket_base_t *socket_,
+                                   const options_t& options_)
+    : stream_object_t (options_, std::string()),
       socket (socket_),
-      options(options_),  
-      norm_instance(NORM_INSTANCE_INVALID),
+      options (options_),  
+      norm_instance (NORM_INSTANCE_INVALID),
       norm_descriptor (retired_fd),
       norm_descriptor_handle (0),
-      norm_session(NORM_SESSION_INVALID), 
+      norm_session (NORM_SESSION_INVALID), 
       norm_plugged (false),
-      is_unicast(false),
-      is_sender(false),
-      is_receiver(false),
-      is_twoway(false),
-      is_accept(false),
-      zmq_encoder(0),
-      norm_tx_stream(NORM_OBJECT_INVALID), 
-      tx_first_msg(true),
-      tx_more_bit(false), 
-      zmq_output_ready(false),
-      norm_tx_ready(false), 
-      tx_index(0),
-      tx_len(0),
-      norm_acking(false),
-      norm_watermark_pending(false),
-      norm_segment_size(0),
-      norm_stream_buffer_max(0),
-      norm_stream_buffer_count(0),
-      norm_stream_bytes_remain(0),
-      norm_ack_retry_max(1),
-      norm_ack_retry_count(0),
-      zmq_input_ready(false)
+      is_unicast (false),
+      is_sender (false),
+      is_receiver (false),
+      is_stream (false),
+      from_listener (false),
+      zmq_encoder (0),
+      norm_tx_stream (NORM_OBJECT_INVALID), 
+      tx_first_msg (true),
+      tx_more_bit (false), 
+      zmq_output_ready (false),
+      norm_tx_ready (false), 
+      tx_index (0),
+      tx_len (0),
+      norm_acking (false),
+      norm_watermark_pending (false),
+      norm_segment_size (0),
+      norm_stream_buffer_max (0),
+      norm_stream_buffer_count (0),
+      norm_stream_bytes_remain (0),
+      norm_ack_retry_max (1),
+      norm_ack_retry_count (0),
+      zmq_input_ready (false)
 {
-    int rc = tx_msg.init();
-    errno_assert(0 == rc);
-    // tell stream_object to send the greeting all at once, not in parts
+    int rc = tx_msg.init ();
+    errno_assert (0 == rc);
+    //  Tell stream_object to use its special behaviors for a norm stream. For
+    //  example, require V3 proto, and send greeting all at once, not in parts.
     set_using_norm (true);
 }
 
-zmq::norm_engine_t::norm_engine_t(zmq::socket_base_t *socket_,
-                                  const options_t& options_,
-                                  NormInstanceHandle norm_instance_,
-                                  NormSessionHandle norm_session_,
-                                  NormNodeHandle normNodeHandle_,
-                                  norm_address_t &client_norm_address_,
-                                  norm_address_t &listen_norm_address_)
-    : stream_object_t(options_, std::string()),
+zmq::norm_engine_t::norm_engine_t (zmq::socket_base_t *socket_,
+                                   const options_t& options_,
+                                   NormInstanceHandle norm_instance_,
+                                   NormSessionHandle norm_session_,
+                                   NormNodeHandle normNodeHandle_,
+                                   norm_address_t &client_norm_address_,
+                                   norm_address_t &listen_norm_address_)
+    : stream_object_t (options_, std::string()),
       socket (socket_),
-      options(options_),  
-      norm_instance(NORM_INSTANCE_INVALID),
+      options (options_),  
+      norm_instance (NORM_INSTANCE_INVALID),
       norm_descriptor (retired_fd),
       norm_descriptor_handle (0),
-      norm_session(NORM_SESSION_INVALID), 
+      norm_session (NORM_SESSION_INVALID), 
       norm_plugged (false),
-      is_unicast(false),
-      is_sender(false),
-      is_receiver(false),
-      is_twoway(false),
-      is_accept(false),
-      zmq_encoder(0),
-      norm_tx_stream(NORM_OBJECT_INVALID), 
-      tx_first_msg(true),
-      tx_more_bit(false), 
-      zmq_output_ready(false),
-      norm_tx_ready(false), 
-      tx_index(0),
-      tx_len(0),
-      norm_acking(false),
-      norm_watermark_pending(false),
-      norm_segment_size(0),
-      norm_stream_buffer_max(0),
-      norm_stream_buffer_count(0),
-      norm_stream_bytes_remain(0),
-      norm_ack_retry_max(1),
-      norm_ack_retry_count(0),
-      zmq_input_ready(false)
+      is_unicast (false),
+      is_sender (false),
+      is_receiver (false),
+      is_stream (false),
+      from_listener (false),
+      zmq_encoder (0),
+      norm_tx_stream (NORM_OBJECT_INVALID), 
+      tx_first_msg (true),
+      tx_more_bit (false), 
+      zmq_output_ready (false),
+      norm_tx_ready (false), 
+      tx_index (0),
+      tx_len (0),
+      norm_acking (false),
+      norm_watermark_pending (false),
+      norm_segment_size (0),
+      norm_stream_buffer_max (0),
+      norm_stream_buffer_count (0),
+      norm_stream_bytes_remain (0),
+      norm_ack_retry_max (1),
+      norm_ack_retry_count (0),
+      zmq_input_ready (false)
 {
-    int rc = tx_msg.init();
-    errno_assert(0 == rc);
-    // tell stream_object to send the greeting all at once, not in parts
+    int rc = tx_msg.init ();
+    errno_assert (0 == rc);
+    //  Tell stream_object to use its special behaviors for a norm stream. For
+    //  example, require V3 proto, and send greeting all at once, not in parts.
     set_using_norm (true);
+
     rc = init (norm_instance_, norm_session_, normNodeHandle_,
                client_norm_address_, listen_norm_address_);
     zmq_assert (rc >= 0);
-    fd_t fd = NormGetDescriptor(norm_instance_);
+    fd_t fd = NormGetDescriptor (norm_instance_);
     std::string listen_endpoint;
     listen_norm_address_.to_string (listen_endpoint);
     socket->event_accepted (listen_endpoint, fd);
@@ -130,42 +133,46 @@ zmq::norm_engine_t::norm_engine_t(zmq::socket_base_t *socket_,
 
 zmq::norm_engine_t::norm_engine_t(zmq::socket_base_t *socket_,
                                   const options_t& options_,
-                                  const char* network_, bool send, bool recv)
+                                  const char* network_,
+                                  bool send,
+                                  bool recv)
     : stream_object_t(options_, std::string()),
       socket (socket_),
-      options(options_),  
-      norm_instance(NORM_INSTANCE_INVALID),
+      options (options_),  
+      norm_instance (NORM_INSTANCE_INVALID),
       norm_descriptor (retired_fd),
       norm_descriptor_handle (0),
-      norm_session(NORM_SESSION_INVALID), 
+      norm_session (NORM_SESSION_INVALID), 
       norm_plugged (false),
-      is_unicast(false),
-      is_sender(false),
-      is_receiver(false),
-      is_twoway(false),
-      is_accept(false),
-      zmq_encoder(0),
-      norm_tx_stream(NORM_OBJECT_INVALID), 
-      tx_first_msg(true),
-      tx_more_bit(false), 
-      zmq_output_ready(false),
-      norm_tx_ready(false), 
-      tx_index(0),
-      tx_len(0),
-      norm_acking(false),
-      norm_watermark_pending(false),
-      norm_segment_size(0),
-      norm_stream_buffer_max(0),
-      norm_stream_buffer_count(0),
-      norm_stream_bytes_remain(0),
-      norm_ack_retry_max(1),
-      norm_ack_retry_count(0),
-      zmq_input_ready(false)
+      is_unicast (false),
+      is_sender (false),
+      is_receiver (false),
+      is_stream (false),
+      from_listener (false),
+      zmq_encoder (0),
+      norm_tx_stream (NORM_OBJECT_INVALID), 
+      tx_first_msg (true),
+      tx_more_bit (false), 
+      zmq_output_ready (false),
+      norm_tx_ready (false), 
+      tx_index (0),
+      tx_len (0),
+      norm_acking (false),
+      norm_watermark_pending (false),
+      norm_segment_size (0),
+      norm_stream_buffer_max (0),
+      norm_stream_buffer_count (0),
+      norm_stream_bytes_remain (0),
+      norm_ack_retry_max (1),
+      norm_ack_retry_count (0),
+      zmq_input_ready (false)
 {
-    int rc = tx_msg.init();
-    errno_assert(0 == rc);
-    // tell stream_object to send the greeting all at once, not in parts
+    int rc = tx_msg.init ();
+    errno_assert (0 == rc);
+    //  Tell stream_object to use its special behaviors for a norm stream. For
+    //  example, require V3 proto, and send greeting all at once, not in parts.
     set_using_norm (true);
+
     rc = init (network_, send, recv);
     zmq_assert (rc >= 0);
 }
@@ -186,8 +193,8 @@ int zmq::norm_engine_t::init (NormInstanceHandle norm_instance_,
     zmq_assert (norm_session_ != NORM_SESSION_INVALID);
 
     // listener calls this API meaning a 2-way messaging model vs 1-way pub/sub
-    is_accept = true;
-    is_twoway = true;
+    from_listener = true;
+    is_stream = true;
     is_unicast = true;
     is_receiver = true;
     is_sender = true;
@@ -208,9 +215,9 @@ int zmq::norm_engine_t::init (NormInstanceHandle norm_instance_,
     UINT16 normSegmentSize = 1400;  // NORM_DATA payload size
     UINT16 normNumData = 16;   // FEC block size (user data packets per block)
     // Number of FEC parity packets _computed_ per block
-    UINT32 normStreamBufferSize = (is_twoway ? 2*1024*1024 : 256*1024);
+    UINT32 normStreamBufferSize = (is_stream ? 2*1024*1024 : 256*1024);
     if (options.sndbuf != 0)
-        normStreamBufferSize = (is_twoway ? 2 * options.sndbuf : options.sndbuf);
+        normStreamBufferSize = (is_stream ? 2 * options.sndbuf : options.sndbuf);
 
     norm_tx_ready = true;
     norm_tx_stream = NormStreamOpen(norm_session, normStreamBufferSize);
@@ -251,7 +258,7 @@ int zmq::norm_engine_t::init (NormInstanceHandle norm_instance_,
 int zmq::norm_engine_t::init(const char* network_, bool send, bool recv)
 {
     // both send & recv set means the 2-way messaging model, vs 1-way pub/sub
-    is_twoway = send && recv;
+    is_stream = send && recv;
 
     // Parse the "network_" address into id, iface, IP/host addr, and port
     // norm endpoint format: [id,][<iface>;]<addr>:<port>
@@ -263,7 +270,7 @@ int zmq::norm_engine_t::init(const char* network_, bool send, bool recv)
     }
     norm_address.to_string (endpoint);
     
-    if (is_twoway) {
+    if (is_stream) {
         // Require unicast address for 2-way connection
         if (!NormIsUnicastAddress (norm_address.getRawHostName ())) {
             errno = EINVAL;
@@ -290,9 +297,9 @@ int zmq::norm_engine_t::init(const char* network_, bool send, bool recv)
     //       c) Randomize and implement a NORM session layer
     //          conflict detection/resolution protocol
 
-    const char *hostname = (is_twoway ? "127.0.0.1" :
+    const char *hostname = (is_stream ? "127.0.0.1" :
                             norm_address.getRawHostName ());
-    UINT16 port = (is_twoway ? 0 : norm_address.getPortNumber ());
+    UINT16 port = (is_stream ? 0 : norm_address.getPortNumber ());
     norm_session = NormCreateSession(norm_instance, hostname, port,
                                      norm_address.getNormNodeId ());
     if (NORM_SESSION_INVALID == norm_session)
@@ -337,15 +344,15 @@ int zmq::norm_engine_t::init(const char* network_, bool send, bool recv)
     UINT16 normNumData = 16;   // FEC block size (user data packets per block)
     // Number of FEC parity packets _computed_ per block
     UINT16 normNumParity = 4;
-    UINT32 normRxBufferSize = (is_twoway ? 2*1024*1024 : 128*1024);
+    UINT32 normRxBufferSize = (is_stream ? 2*1024*1024 : 128*1024);
     if (options.rcvbuf != 0) normRxBufferSize = options.rcvbuf;
-    UINT32 normTxBufferSize = (is_twoway ? 2*1024*1024 : 128*1024);
+    UINT32 normTxBufferSize = (is_stream ? 2*1024*1024 : 128*1024);
     if (options.sndbuf != 0) normTxBufferSize = options.sndbuf;
-    UINT32 normStreamBufferSize = (is_twoway ? 2*1024*1024 : 256*1024);
+    UINT32 normStreamBufferSize = (is_stream ? 2*1024*1024 : 256*1024);
     if (options.sndbuf != 0)
-        normStreamBufferSize = (is_twoway ? 2 * options.sndbuf : options.sndbuf);
+        normStreamBufferSize = (is_stream ? 2 * options.sndbuf : options.sndbuf);
 
-    if (is_twoway) {
+    if (is_stream) {
         // To get here, this unicast socket must be connecting, not binding
 
         // Here is how we connect with an ephemeral port, rather than needing
@@ -386,7 +393,7 @@ int zmq::norm_engine_t::init(const char* network_, bool send, bool recv)
 
     if (send)
     {
-        if (is_twoway) {
+        if (is_stream) {
             // change the session destination to the server address/port
             bool worked = NormChangeDestination(norm_session,
                                                 norm_address.getRawHostName (),
@@ -421,7 +428,7 @@ int zmq::norm_engine_t::init(const char* network_, bool send, bool recv)
             return -1;
         }
 
-        if (is_twoway) {
+        if (is_stream) {
             // Init variables related to ack-based flow control
             // (norm_acking MUST be set "true" for this to be used)
             norm_acking = true;
@@ -500,7 +507,7 @@ void zmq::norm_engine_t::plug (io_thread_t* io_thread_,
     zmq_assert (!session);
     zmq_assert (session_);
 
-    if (is_twoway) {
+    if (is_stream) {
         stream_object_t::plug (io_thread_, session_);
     } else {
         session = session_;
@@ -521,7 +528,7 @@ void zmq::norm_engine_t::unplug()
     zmq_assert (norm_plugged);
     norm_plugged = false;
 
-    if (is_twoway) {
+    if (is_stream) {
         stream_object_t::unplug ();
     } else {
         rm_fd(norm_descriptor_handle);
@@ -550,12 +557,12 @@ void zmq::norm_engine_t::send_data()
     // Here we write as much as is available or we can
     while (zmq_output_ready && norm_tx_ready)
     {
-        if (is_twoway) {
+        if (is_stream) {
             stream_object_t::out_event();
             continue;
         }
 
-        zmq_assert (!is_twoway);
+        zmq_assert (!is_stream);
         if (0 == tx_len)
         {
             // Our tx_buffer needs data to send
@@ -739,14 +746,19 @@ void zmq::norm_engine_t::in_event()
         if (event.type < NORM_GRTT_UPDATED &&
             event.type != NORM_TX_RATE_CHANGED) {
 
-            char clientAddr[64];
-            UINT16 clientPort;
-            norm_address_t::getEventAddr(event, clientAddr, clientPort);
-
-            std::cout << "engine event: " << event.type
-                      << " from " << clientAddr << ":" << clientPort
-                      << " ID " << NormNodeGetId (event.sender)
-                      << std::endl << std::flush;
+            if (event.type > NORM_TX_RATE_CHANGED) {
+                char clientAddr[64];
+                UINT16 clientPort;
+                norm_address_t::getEventAddr(event, clientAddr, clientPort);
+                std::cout << "engine event: " << event.type
+                          << " from " << clientAddr << ":" << clientPort
+                          << " ID " << NormNodeGetId (event.sender)
+                          << std::endl << std::flush;
+            }
+            else
+                //  NORM_TX_* events don't have address, port, or normID set
+                std::cout << "engine event: " << event.type
+                          << std::endl << std::flush;
         }
 #endif
 
@@ -857,7 +869,7 @@ void zmq::norm_engine_t::in_event()
             }
 
             case NORM_REMOTE_SENDER_NEW:
-                if (is_twoway) {
+                if (is_stream) {
                     events_processed++;
                     NormNodeId remoteId = NormNodeGetId(event.sender);
 #ifdef ZMQ_DEBUG_NORM
@@ -881,7 +893,8 @@ void zmq::norm_engine_t::in_event()
                     sender_address.setNormNodeId (NormNodeGetId (event.sender));
                     std::string sender_endpoint;
                     sender_address.to_string (sender_endpoint);
-                    if (!is_accept) 
+                    //  from_listener engine has already called event_accepted
+                    if (!from_listener)
                         socket->event_connected (sender_endpoint,
                                                  engine_get_fd ());
                 }
@@ -950,7 +963,7 @@ void zmq::norm_engine_t::recv_data(NormObjectHandle object)
         {
             // This is a new stream, so create rxState with zmq decoder, etc
             rxState = new NormRxStreamState(object, options.maxmsgsize);
-            if (!rxState->Init(is_twoway))
+            if (!rxState->Init(is_stream))
             {
                 errno_assert(false);
                 delete rxState;
@@ -983,7 +996,7 @@ void zmq::norm_engine_t::recv_data(NormObjectHandle object)
         NormRxStreamState* rxState;
         while (NULL != (rxState = iterator.GetNextItem()))
         {
-            switch(rxState->Decode (is_twoway))
+            switch(rxState->Decode (is_stream))
             {
                 case 1:  // msg completed   
                     // Complete message decoded, move this stream to
@@ -1048,7 +1061,7 @@ void zmq::norm_engine_t::recv_data(NormObjectHandle object)
             if (!NormStreamRead(stream, rxState->AccessBuffer(), &numBytes))
             {
                 // broken NORM stream, so re-sync
-                rxState->Init(is_twoway);  // TBD - check result
+                rxState->Init(is_stream);  // TBD - check result
                 // This will retry syncing, and getting data from this stream
                 // since we don't increment the "it" iterator
                 continue;
@@ -1080,10 +1093,10 @@ void zmq::norm_engine_t::recv_data(NormObjectHandle object)
             NormRxStreamState* rxState;
             while (NULL != (rxState = iterator.GetNextItem()))
             {
-                if (is_twoway) {
+                if (is_stream) {
                     if (!zmq_input_ready) break;
                     if (!decoder) {
-                        if (is_twoway)
+                        if (is_stream)
                             decoder = new (std::nothrow) norm_decoder_t
                                 (in_batch_size, options.maxmsgsize);
                         else
@@ -1130,7 +1143,7 @@ void zmq::norm_engine_t::recv_data(NormObjectHandle object)
     }  // end while ((!rx_ready_list.empty() || (zmq_input_ready && !msg_ready_list.empty()))
     
     // Alert zmq of the messages we have pushed up
-    if (!is_twoway)
+    if (!is_stream)
         session->flush ();
     
 }  // end zmq::norm_engine_t::recv_data()
@@ -1166,13 +1179,13 @@ zmq::norm_engine_t::NormRxStreamState::~NormRxStreamState()
     }
 }
 
-bool zmq::norm_engine_t::NormRxStreamState::Init(bool is_twoway_)
+bool zmq::norm_engine_t::NormRxStreamState::Init(bool is_stream_)
 {
     in_sync = false;
     skip_norm_sync = false;
     if (NULL != zmq_decoder) delete zmq_decoder;
     // Note "in_batch_size" comes from config.h
-    if (is_twoway_)
+    if (is_stream_)
         zmq_decoder =
             new (std::nothrow) norm_decoder_t (in_batch_size, max_msg_size);
     else
@@ -1194,7 +1207,7 @@ bool zmq::norm_engine_t::NormRxStreamState::Init(bool is_twoway_)
 
 // This decodes any pending data sitting in our stream decoder buffer
 // It returns 1 upon message completion, -1 on error, 1 on msg completion
-int zmq::norm_engine_t::NormRxStreamState::Decode(bool is_twoway_)
+int zmq::norm_engine_t::NormRxStreamState::Decode(bool is_stream_)
 {
     // If we have pending bytes to decode, process those first
     while (buffer_count > 0)
@@ -1230,7 +1243,7 @@ int zmq::norm_engine_t::NormRxStreamState::Decode(bool is_twoway_)
                 // decoder error (reset decoder and state variables)
                 in_sync = false;
                 skip_norm_sync = false;  // will get consumed by norm sync check
-                Init(is_twoway_);
+                Init(is_stream_);
                 break;
                 
             case 0:

@@ -62,6 +62,7 @@ namespace zmq
         inline virtual ~decoder_base_t ()
         {
             free (buf);
+            buf = 0;
         }
 
         //  Returns a buffer to be filled with binary data.

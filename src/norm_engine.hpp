@@ -121,7 +121,7 @@ namespace zmq
                     
             NormObjectHandle GetStreamHandle() const { return norm_stream; }
                     
-            bool Init(bool is_twoway_);
+            bool Init(bool is_stream_);
                     
             void SetRxReady(bool state) { rx_ready = state; }
             bool IsRxReady () const { return rx_ready; }
@@ -143,7 +143,7 @@ namespace zmq
             // 1 if the message is complete, If an error
             // occurs the 'sync' is dropped and the
             // decoder re-initialized
-            int Decode (bool is_twoway_);
+            int Decode (bool is_stream_);
                     
             class List
             {
@@ -196,8 +196,6 @@ namespace zmq
                 
         };  // end class zmq::norm_engine_t::NormRxStreamState
             
-        /// session_base_t*         zmq_session;
-        /// #define zmq_session session
         socket_base_t*          socket;
         options_t               options;
         NormInstanceHandle      norm_instance;
@@ -206,13 +204,18 @@ namespace zmq
         NormSessionHandle       norm_session;
         norm_address_t          norm_address;
         bool                    norm_plugged;
+        //  Is norm_address a unicast address, not multicast?
         bool                    is_unicast;
+        //  Are we sending, so pub or twoway
         bool                    is_sender;
+        //  Are we receiving, so pub or twoway
         bool                    is_receiver;
-        bool                    is_twoway;
-        bool                    is_accept;
+        //  Is this a zeromq stream connection: unicast, sender, and receiver
+        bool                    is_stream;
+        //  Was this started by a norm_listener? (If so, must be twoway)
+        bool                    from_listener;
             
-        // Sender state
+        //  Sender state
         msg_t                   tx_msg;
         v2_encoder_t            zmq_encoder;    // for tx messages (we use v2 for now)  
         NormObjectHandle        norm_tx_stream;
@@ -225,10 +228,10 @@ namespace zmq
         unsigned int            tx_index;
         unsigned int            tx_len;
 
-        // Sender variables below used to manage ack-based stream flow control.
-        // (norm_acking needs to be set "true" and at least one node id added
+        //  Sender variables below used to manage ack-based stream flow control
+        //  (norm_acking needs to be set "true" and at least one node id added
         //  via NormAddAckingNode() for this stuff to kick into action.)
-        // This makes the NORM sender flow controlled similar to a TCP socket.
+        //  This makes the NORM sender flow controlled similar to a TCP socket.
         bool                    norm_acking;
         bool                    norm_watermark_pending;
         UINT16                  norm_segment_size;
@@ -238,17 +241,17 @@ namespace zmq
         unsigned int            norm_ack_retry_max;
         unsigned int            norm_ack_retry_count;
             
-        // Receiver state
+        //  Receiver state
         bool                    zmq_input_ready; // zmq ready to receive msg(s)
-        // Lists of norm rx streams from remote senders
-        // rx streams waiting for data reception
+        //  Lists of norm rx streams from remote senders
+        //  rx streams waiting for data reception
         NormRxStreamState::List rx_pending_list;
-        // rx streams ready for NormStreamRead()
+        //  rx streams ready for NormStreamRead()
         NormRxStreamState::List rx_ready_list;
-        // rx streams w/ msg ready for push to zmq
+        //  rx streams w/ msg ready for push to zmq
         NormRxStreamState::List msg_ready_list;
 
-    };  // end class norm_engine_t
+    };  //  end class norm_engine_t
 }
 
 #endif // ZMQ_HAVE_NORM

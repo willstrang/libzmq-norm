@@ -65,9 +65,12 @@ zmq::norm_listener_t::norm_listener_t (io_thread_t *io_thread_,
     socket (socket_),  
     listen_instance(NORM_INSTANCE_INVALID),
     listen_session(NORM_SESSION_INVALID)
+#ifdef ZMQ_DEBUG_NORM
+    , zmq_input_ready(false)
+#endif
 {
 #ifdef ZMQ_DEBUG_NORM
-    is_twoway = true;
+    is_stream = true;
 #endif
 }
 
@@ -141,9 +144,7 @@ void zmq::norm_listener_t::in_event ()
 #endif
         switch(event.type) {
 
-            // #ifdef NORM_REMOTE_SENDER_RESET
         case NORM_REMOTE_SENDER_RESET:
-            // #endif
         case NORM_REMOTE_SENDER_NEW:
         {
             norm_address_t client_address;
@@ -230,18 +231,6 @@ void zmq::norm_listener_t::in_event ()
                                    event.sender, client_address,
                                    listen_address);
                 alloc_assert (engine);
-#ifdef UNUSED
-                int rc = engine->init (client_instance, client_session,
-                                       event.sender, client_address,
-                                       listen_address);
-                if (rc < 0) {
-                    // errno set by whatever caused init to fail
-                    socket->event_accept_failed (endpoint, errno);
-                    NormDestroySession (client_session);
-                    NormDestroyInstance (client_instance);
-                    return;
-                }
-#endif
 
                 //  Choose I/O thread to run engine in.
                 io_thread_t *io_thread = choose_io_thread (options.affinity);
@@ -310,6 +299,24 @@ void zmq::norm_listener_t::in_event ()
 #endif
             break;
 
+        case NORM_RX_OBJECT_ABORTED:
+#ifdef ZMQ_DEBUG_NORM
+            {
+                NormRxStreamState* rxState =
+                    (NormRxStreamState*)NormObjectGetUserData(event.object);
+                if (NULL != rxState)
+                {
+                    // Remove the state from the list it's in
+                    // This is now unnecessary since deletion takes care of
+                    // list removal, but in the interest of being clear ...
+                    NormRxStreamState::List* list = rxState->AccessList();
+                    if (NULL != list) list->Remove(*rxState);
+                }
+                delete rxState;
+            }
+#endif
+            break;
+
         default:
             // We ignore all other NORM events 
 #if defined ZMQ_DEBUG_NORM && not defined ZMQ_DEBUG_NORM_2
@@ -330,33 +337,6 @@ void zmq::norm_listener_t::in_event ()
         }  // end switch(event.type)
     }  // while...
 }  // zmq::norm_listener_t::in_event()
-
-#ifdef UNUSED
-void zmq::norm_listener_t::start_connection (...)
-{
-    // remember our fd for ZMQ_SRCFD in messages
-    // socket->set_fd(fd);
-
-    //  Create the engine object for this connection.
-    stream_engine_t *engine = new (std::nothrow)
-        norm_engine_t (fd, options, endpoint);
-    alloc_assert (engine);
-
-    //  Choose I/O thread to run connecter in. Given that we are already
-    //  running in an I/O thread, there must be at least one available.
-    io_thread_t *io_thread = choose_io_thread (options.affinity);
-    zmq_assert (io_thread);
-
-    //  Create and launch a session object.
-    session_base_t *session = session_base_t::create (io_thread, false,
-                                                      socket, options, NULL);
-    errno_assert (session);
-    session->inc_seqnum ();
-    launch_child (session);
-    send_attach (session, engine, false);
-    socket->event_accepted (endpoint, fd);
-}
-#endif
 
 void zmq::norm_listener_t::close ()
 {
@@ -546,7 +526,7 @@ void zmq::norm_listener_t::recv_data(NormObjectHandle object)
             (NormRxStreamState*)NormObjectGetUserData(object);
         if (NULL == rxState)
         {
-            if (is_twoway) {
+            if (is_stream) {
                 
             }
             // This is a new stream, so create rxState with zmq decoder, etc

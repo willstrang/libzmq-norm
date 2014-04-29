@@ -1069,8 +1069,8 @@ void zmq::stream_object_t::set_keepalive_timer ()
                     time, options.keepalive_ivl, keepalive_limit_in,
                     peer_keepalive_ivl, keepalive_limit_out);
             get_io_thread ()->log (buf);
-#endif
         }
+#endif
     } else {
         keepalive_ivl_time = 0;
     }

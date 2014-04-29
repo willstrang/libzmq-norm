@@ -136,6 +136,8 @@ zmq::socket_base_t::socket_base_t (ctx_t *parent_, uint32_t tid_, int sid_) :
     tag (0xbaddecaf),
     ctx_terminated (false),
     destroyed (false),
+    //  VeriSign Custom Code
+    terminate_unpiped_session (false),
     last_tsc (0),
     ticks (0),
     rcvmore (false),
@@ -427,15 +429,15 @@ int zmq::socket_base_t::bind (const char *addr_)
 #endif
 #if defined ZMQ_HAVE_TIPC
     if (protocol == "tipc") {
-         tipc_listener_t *listener = new (std::nothrow) tipc_listener_t (
+        tipc_listener_t *listener = new (std::nothrow) tipc_listener_t (
               io_thread, this, options);
-         alloc_assert (listener);
-         int rc = listener->set_address (address.c_str ());
-         if (rc != 0) {
-             delete listener;
-             event_bind_failed (address, zmq_errno());
-             return -1;
-         }
+        alloc_assert (listener);
+        int rc = listener->set_address (address.c_str ());
+        if (rc != 0) {
+            delete listener;
+            event_bind_failed (address, zmq_errno());
+            return -1;
+        }
 
         // Save last endpoint URI
         listener->get_address (last_endpoint);
@@ -446,15 +448,17 @@ int zmq::socket_base_t::bind (const char *addr_)
 #endif
 #if defined ZMQ_HAVE_NORM
     if (protocol == "norm") {
-         norm_listener_t *listener = new (std::nothrow) norm_listener_t (
+        //  norm doesn't have FD events to close engine/sessions like TCP/TIPC
+        terminate_unpiped_session = true;
+        norm_listener_t *listener = new (std::nothrow) norm_listener_t (
               io_thread, this, options);
-         alloc_assert (listener);
-         int rc = listener->set_address (address.c_str ());
-         if (rc != 0) {
-             delete listener;
-             event_bind_failed (address, zmq_errno());
-             return -1;
-         }
+        alloc_assert (listener);
+        int rc = listener->set_address (address.c_str ());
+        if (rc != 0) {
+            delete listener;
+            event_bind_failed (address, zmq_errno());
+            return -1;
+        }
 
         // Save last endpoint URI
         listener->get_address (last_endpoint);
@@ -661,12 +665,14 @@ int zmq::socket_base_t::connect (const char *addr_)
 #if defined ZMQ_HAVE_NORM
     else
     if (protocol == "norm") {
-        // make sure norm address is valid & resolves, but don't save resolved
-        // norm being UDP based, there's no point in delaying resolution check
+        //  Make sure norm address is valid & resolves, but don't save resolved
+        //  norm being UDP based, there's no point in delaying resolution check
         norm_address_t norm_address;
         int rc = norm_address.resolve (address.c_str(), false, options.ipv6);
         if (rc != 0)
              return -1;
+        //  norm doesn't have FD events to close engine/sessions like TCP/TIPC
+        terminate_unpiped_session = true;
     }
 #endif
 

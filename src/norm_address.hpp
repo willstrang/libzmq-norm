@@ -24,8 +24,8 @@
 
 #if defined ZMQ_HAVE_NORM
 
-#define ZMQ_DEBUG_NORM
-#define ZMQ_DEBUG_NORM_2
+// #define ZMQ_DEBUG_NORM
+// #define ZMQ_DEBUG_NORM_2
 
 #include <string> // tcp_address.hpp needs this
 #include "tcp_address.hpp"

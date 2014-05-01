@@ -46,6 +46,7 @@ libzmq_la_SOURCES = \
     mtrie.hpp \
     mutex.hpp \
     norm_address.hpp \
+    norm_decoder.hpp \
     norm_engine.hpp \
     norm_listener.hpp \
     null_mechanism.hpp \
@@ -77,6 +78,7 @@ libzmq_la_SOURCES = \
     stdint.hpp \
     stream.hpp \
     stream_engine.hpp \
+    stream_object.hpp \
     sub.hpp \
     tcp.hpp \
     tcp_address.hpp \
@@ -116,6 +118,7 @@ libzmq_la_SOURCES = \
     msg.cpp \
     mtrie.cpp \
     norm_address.cpp \
+    norm_decoder.cpp \
     norm_engine.cpp \
     norm_listener.cpp \
     null_mechanism.cpp \
@@ -144,6 +147,7 @@ libzmq_la_SOURCES = \
     socket_base.cpp \
     stream.cpp \
     stream_engine.cpp \
+    stream_object.cpp \
     sub.cpp \
     tcp.cpp \
     tcp_address.cpp \

@@ -223,6 +223,8 @@ namespace zmq
 
         // which protocol version does this peer use: -1 == unversioned
         char protocol_version;
+
+        unsigned char last_msg_flags;  // used only when using_norm
         //  end of VeriSign Custom Code
 
         options_t options;
@@ -242,13 +244,7 @@ namespace zmq
 
         bool using_norm;  // do message framing for norm, requires v3 only
 
-        unsigned char last_msg_flags;  // used only when using_norm
-
         bool plugged;
-
-        int (stream_object_t::*read_msg) (msg_t *msg_);
-
-        int (stream_object_t::*write_msg) (msg_t *msg_);
 
         bool io_error;
 
@@ -257,13 +253,17 @@ namespace zmq
         //  Needed to support old peers.
         bool subscription_required;
 
-        mechanism_t *mechanism;
-
         //  True iff the engine couldn't consume the last decoded message.
         bool input_stopped;
 
         //  True iff the engine doesn't have any message to encode.
         bool output_stopped;
+
+        mechanism_t *mechanism;
+
+        int (stream_object_t::*read_msg) (msg_t *msg_);
+
+        int (stream_object_t::*write_msg) (msg_t *msg_);
 
         // Socket
         zmq::socket_base_t *socket;

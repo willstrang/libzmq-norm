@@ -137,6 +137,8 @@ namespace zmq
                 return (buffer_size - buffer_count); }
             void IncrementBufferCount (size_t count) { buffer_count += count; }
             msg_t* AccessMsg () { return zmq_decoder->msg(); }
+            size_t GetBytesRead () { return msg_bytes_read; }
+            void IncrementBytesRead (size_t bytes) { msg_bytes_read += bytes; }
 
             // This invokes the decoder "decode" method
             // returning 0 if more data is needed,
@@ -163,6 +165,7 @@ namespace zmq
                 public:
                     Iterator (const List& list);
                     NormRxStreamState* GetNextItem ();
+                    NormRxStreamState* Restart (const List& list);
                 private:
                     NormRxStreamState* next_item;
                 };
@@ -189,6 +192,7 @@ namespace zmq
             unsigned char*              buffer_ptr;
             size_t                      buffer_size;
             size_t                      buffer_count;
+            size_t                      msg_bytes_read;
                     
             NormRxStreamState*          prev;
             NormRxStreamState*          next;

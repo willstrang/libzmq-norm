@@ -1089,33 +1089,32 @@ void zmq::norm_engine_t::recv_data(NormObjectHandle object)
             // zmq session is ready for more input).  This may possibly return
             // streams back to the "rx ready" stream list after their pending
             // message is handled
-            NormRxStreamState::List::Iterator iterator(msg_ready_list);
+            NormRxStreamState::List::Iterator iterator (msg_ready_list);
             NormRxStreamState* rxState;
-            while (NULL != (rxState = iterator.GetNextItem()))
+            while (NULL != (rxState = iterator.GetNextItem ()))
             {
                 if (is_stream) {
                     if (!zmq_input_ready) break;
                     if (!decoder) {
-                        if (is_stream)
-                            decoder = new (std::nothrow) norm_decoder_t
-                                (in_batch_size, options.maxmsgsize);
-                        else
-                            decoder = new (std::nothrow) v2_decoder_t
-                                (in_batch_size, options.maxmsgsize);
+                        // This is stream, so use norm_decoder_t, not v2...
+                        decoder = new (std::nothrow) norm_decoder_t
+                            (in_batch_size, options.maxmsgsize);
                     }
 #if defined ZMQ_DEBUG_NORM
                     std::cout << "stream_object_t::in_event with "
-                              << rxState->AccessMsg()->size () << " "
+                              << rxState->AccessMsg ()->size () << " "
                               << std::endl << std::flush;
 #endif
                     // Allow stream_object_t to process the received msg
                     stream_object_t::in_event ();
-                    if (msg_ready_list.IsEmpty ()) break;
+                    //  Always go back to head, as stream_object_t::in_event ()
+                    //  changes msg_ready_list, so next_item could be invalid.
+                    iterator.Restart (msg_ready_list);
                     continue;
                 }
 
-                msg_t* msg = rxState->AccessMsg();
-                if (-1 == session->push_msg(msg))
+                msg_t* msg = rxState->AccessMsg ();
+                if (-1 == session->push_msg (msg))
                 {
                     if (EAGAIN == errno)
                     {
@@ -1150,18 +1149,19 @@ void zmq::norm_engine_t::recv_data(NormObjectHandle object)
 
 zmq::norm_engine_t::NormRxStreamState::NormRxStreamState(NormObjectHandle normStream, 
                                                          int64_t          maxMsgSize)
-    : norm_stream(normStream),
-      max_msg_size(maxMsgSize), 
-      in_sync(false),
-      rx_ready(false),
-      zmq_decoder(NULL),
-      skip_norm_sync(false),
-      buffer_ptr(NULL),
-      buffer_size(0),
-      buffer_count(0),
-      prev(NULL),
-      next(NULL),
-      list(NULL)
+    : norm_stream (normStream),
+      max_msg_size (maxMsgSize), 
+      in_sync (false),
+      rx_ready (false),
+      zmq_decoder (NULL),
+      skip_norm_sync (false),
+      buffer_ptr (NULL),
+      buffer_size (0),
+      buffer_count (0),
+      msg_bytes_read (0),
+      prev (NULL),
+      next (NULL),
+      list (NULL)
 {
 }
 
@@ -1196,6 +1196,7 @@ bool zmq::norm_engine_t::NormRxStreamState::Init(bool is_stream_)
     {
         buffer_count = 0;
         buffer_size = 0;
+        msg_bytes_read = 0;
         zmq_decoder->get_buffer(&buffer_ptr, &buffer_size);
         return true;
     }
@@ -1215,9 +1216,9 @@ int zmq::norm_engine_t::NormRxStreamState::Decode(bool is_stream_)
         // There's pending data for the decoder to decode
         size_t processed = 0;
         
-        // This a bit of a kludgy approach used to weed
-        // out the NORM ZMQ message transport "norm_sync" byte
-        // from the ZMQ message stream being decoded (but it works!)
+        // This a somewhat kludgy approach used to skip
+        // the NORM ZMQ message transport "norm_sync" bytes
+        // in the ZMQ message stream being decoded (but it works!)
         if (skip_norm_sync) 
         {
             buffer_ptr++;
@@ -1225,7 +1226,8 @@ int zmq::norm_engine_t::NormRxStreamState::Decode(bool is_stream_)
             skip_norm_sync = false;
         }
         
-        int rc = zmq_decoder->decode(buffer_ptr, buffer_count, processed);
+        int rc = zmq_decoder->decode (buffer_ptr, buffer_count, processed);
+        msg_bytes_read = 0;
         buffer_ptr += processed;
         buffer_count -= processed;
         switch (rc)
@@ -1235,7 +1237,7 @@ int zmq::norm_engine_t::NormRxStreamState::Decode(bool is_stream_)
                 if (0 == buffer_count)
                 {
                     buffer_size = 0;
-                    zmq_decoder->get_buffer(&buffer_ptr, &buffer_size);
+                    zmq_decoder->get_buffer (&buffer_ptr, &buffer_size);
                 }
                 skip_norm_sync = true;
                 return 1;
@@ -1243,7 +1245,7 @@ int zmq::norm_engine_t::NormRxStreamState::Decode(bool is_stream_)
                 // decoder error (reset decoder and state variables)
                 in_sync = false;
                 skip_norm_sync = false;  // will get consumed by norm sync check
-                Init(is_stream_);
+                Init (is_stream_);
                 break;
                 
             case 0:
@@ -1254,7 +1256,8 @@ int zmq::norm_engine_t::NormRxStreamState::Decode(bool is_stream_)
     // Reset buffer pointer/count for next read
     buffer_count = 0;
     buffer_size = 0;
-    zmq_decoder->get_buffer(&buffer_ptr, &buffer_size);
+    msg_bytes_read = 0;
+    zmq_decoder->get_buffer (&buffer_ptr, &buffer_size);
     return 0;  //  need more data
     
 }  // end zmq::norm_engine_t::NormRxStreamState::Decode()
@@ -1309,6 +1312,12 @@ void zmq::norm_engine_t::NormRxStreamState::List::Remove(NormRxStreamState& item
 zmq::norm_engine_t::NormRxStreamState::List::Iterator::Iterator(const List& list)
  : next_item(list.head)
 {
+}
+
+zmq::norm_engine_t::NormRxStreamState* zmq::norm_engine_t::NormRxStreamState::List::Iterator::Restart(const List& list)
+{
+    next_item = list.head;
+    return next_item;
 }
 
 zmq::norm_engine_t::NormRxStreamState* zmq::norm_engine_t::NormRxStreamState::List::Iterator::GetNextItem()
@@ -1409,9 +1418,19 @@ int zmq::norm_engine_t::read (void *data_, size_t size_)
     NormRxStreamState* rxState;
     if (NULL != (rxState = iterator.GetNextItem())) {
         msg_t* msg = rxState->AccessMsg();
+        size_t bytes_read = rxState->GetBytesRead ();
         size = msg->size ();
-        zmq_assert (size <= size_);
-        ::memcpy (data_, msg->data (), size);
+        zmq_assert (size > bytes_read);
+        size -= bytes_read;
+        unsigned char *data = ((unsigned char *) msg->data ()) + bytes_read;
+        if (size > size_) {
+            //  More data available than asked for. so return some, save rest
+            ::memcpy (data_, data, size_);
+            //  Keep track of how much data has been used from this msg
+            rxState->IncrementBytesRead (size_);
+            return size_;         
+        }
+        ::memcpy (data_, data, size);
         // message was accepted.
         msg_ready_list.Remove (*rxState);
         if (rxState->IsRxReady ())
